@@ -80,7 +80,7 @@ Param
     [Parameter(
         Position=0, 
         Mandatory=$true, 
-        HelpMessage='Enter a ControlUp subfolder to save your Citrix tree'
+        HelpMessage='Enter a ControlUp subfolder to save your Horizon tree'
     )]
     [ValidateNotNullOrEmpty()]
     [string] $folderPath,
@@ -96,13 +96,21 @@ Param
     [Parameter(
         Position=2, 
         Mandatory=$false, 
+        HelpMessage='FQDN of the connectionserver'
+    )]
+    [ValidateNotNullOrEmpty()]
+    [string] $HVConnectionServerFQDN,
+
+    [Parameter(
+        Position=3, 
+        Mandatory=$false, 
         HelpMessage='Execute removal operations. When combined with preview it will only display the proposed changes'
     )]
     [ValidateNotNullOrEmpty()]
     [switch] $Delete,
 
     [Parameter(
-        Position=3, 
+        Position=4, 
         Mandatory=$false, 
         HelpMessage='Enter a path to generate a log file of the proposed changes'
     )]
@@ -110,7 +118,15 @@ Param
     [string] $LogFile,
 
     [Parameter(
-        Position=4, 
+        Position=5, 
+        Mandatory=$false, 
+        HelpMessage='Synchronise the local site only'
+    )]
+    [ValidateNotNullOrEmpty()]
+    [switch] $LocalHVSiteOnly,
+
+   [Parameter(
+        Position=6, 
         Mandatory=$false, 
         HelpMessage='Enter a ControlUp Site'
     )]
@@ -118,44 +134,14 @@ Param
     [string] $Site,
 
     [Parameter(
-        Position=5,
+        Position=7, 
         Mandatory=$false, 
-        HelpMessage='Creates the ControlUp folder structure based on the EUC Environment tree'
+        HelpMessage='File with a list of exceptions, machine names and/or desktop pools'
     )]
     [ValidateNotNullOrEmpty()]
-    [switch] $MatchEUCEnvTree,
+    [string] $Exceptionsfile
 
-    [Parameter(
-        Position=6,
-        Mandatory=$true, 
-        HelpMessage='A list of Brokers to connect and pull data'
-    )]
-    [ValidateNotNullOrEmpty()]
-    [array] $Brokers,
 
-    [Parameter(
-        Position=7,
-        Mandatory=$false, 
-        HelpMessage='A list of Delivery Groups to include.  Works with wildcards'
-    )]
-    [ValidateNotNullOrEmpty()]
-    [array] $includeDeliveryGroup,
-
-    [Parameter(
-        Position=8,
-        Mandatory=$false, 
-        HelpMessage='A list of Delivery Groups to exclude.  Works with wildcards. Exclusions supercede inclusions'
-    )]
-    [ValidateNotNullOrEmpty()]
-    [array] $excludeDeliveryGroup,
-
-    [Parameter(
-        Position=9,
-        Mandatory=$false, 
-        HelpMessage='Adds the Citrix Brokers to the ControlUp tree'
-    )]
-    [ValidateNotNullOrEmpty()]
-    [switch] $addBrokersToControlUp
 ) 
 
 ## For debugging uncomment
@@ -164,7 +150,8 @@ $VerbosePreference = 'continue'
 #$DebugPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 
-
+$Pooldivider="Desktop Pools"
+$RDSDivider="RDS Farms"
 # dot sourcing Functions
 . ".\Build-CUTree.ps1"
 
@@ -211,7 +198,7 @@ function Load-VMWareModules {
                 $null = Add-PSSnapin -Name VMware
             }
             catch {
-                Write-CULog -Message 'The required VMWare PowerShell components were not found as modules or snapins. Please make sure VMWare PowerCLI (version 6.5 or higher required) is installed and available for the user running the script.' -ShowConsole -Type E
+                Write-CULog -Msg 'The required VMWare PowerShell components were not found as modules or snapins. Please make sure VMWare PowerCLI (version 6.5 or higher required) is installed and available for the user running the script.' -ShowConsole -Type E
             }
         }
     }
@@ -224,7 +211,7 @@ function Load-ControlUPModule {
         Import-Module $pathtomodule
     }
     catch {
-        Write-CULog -Message 'The required module was not found. Please make sure COntrolUP.CLI Module is installed and available for the user running the script.' -ShowConsole -Type E
+        Write-CULog -Msg 'The required module was not found. Please make sure COntrolUP.CLI Module is installed and available for the user running the script.' -ShowConsole -Type E
         }
 }
 
@@ -242,7 +229,7 @@ function Connect-HorizonConnectionServer {
         Connect-HVServer -Server $HVConnectionServerFQDN -Credential $Credential
     }
     catch {
-        Write-CULog -Message 'There was a problem connecting to the Horizon View Connection server.' -ShowConsole -Type E
+        Write-CULog -Msg 'There was a problem connecting to the Horizon View Connection server.' -ShowConsole -Type E
     }
 }
 
@@ -257,7 +244,7 @@ function Disconnect-HorizonConnectionServer {
         Disconnect-HVServer -Server $HVConnectionServer -Confirm:$false
     }
     catch {
-        Write-CULog -Message 'There was a problem disconnecting from the Horizon View Connection server.' -ShowConsole -Type W
+        Write-CULog -Msg 'There was a problem disconnecting from the Horizon View Connection server.' -ShowConsole -Type W
     }
 }
 
@@ -285,7 +272,7 @@ function Get-HVDesktopPools {
         return $queryResults
     }
     catch {
-        Write-CULog -Message 'There was a problem retreiving the Horizon View Desktop Pool(s).' -ShowConsole -Type E
+        Write-CULog -Msg 'There was a problem retreiving the Horizon View Desktop Pool(s).' -ShowConsole -Type E
     }
 }
 
@@ -310,7 +297,7 @@ function Get-HVFarms {
         return $queryResults
     }
     catch {
-        Write-CULog -Message 'There was a problem retreiving the Horizon View RDS Farm(s).' -ShowConsole -Type E
+        Write-CULog -Msg 'There was a problem retreiving the Horizon View RDS Farm(s).' -ShowConsole -Type E
     }
 }
 
@@ -340,7 +327,7 @@ function Get-HVDesktopMachines {
         return $queryResults
     }
     catch {
-        Write-CULog -Message 'There was a problem retreiving the Horizon View machines.' -ShowConsole -Type E
+        Write-CULog -Msg 'There was a problem retreiving the Horizon View machines.' -ShowConsole -Type E
     }
 }
 
@@ -370,7 +357,88 @@ function Get-HVRDSMachines {
         return $queryResults
     }
     catch {
-        Write-CULog -Message 'There was a problem retreiving the Horizon View machines.' -ShowConsole -Type E
+        Write-CULog -Msg 'There was a problem retreiving the Horizon View machines.' -ShowConsole -Type E
+    }
+}
+
+function Write-CULog {
+    <#
+    .SYNOPSIS
+        Write the Logfile
+    .DESCRIPTION
+        Helper Function to Write Log Messages to Console Output and corresponding Logfile
+        use get-help <functionname> -full to see full help
+    .EXAMPLE
+        Write-CULog -Msg "Warining Text" -Type W
+    .EXAMPLE
+        Write-CULog -Msg "Text would be shown on Console" -ShowConsole
+    .EXAMPLE
+        Write-CULog -Msg "Text would be shown on Console in Cyan Color, information status" -ShowConsole -Color Cyan
+    .EXAMPLE
+        Write-CULog -Msg "Error text, script would be existing automaticaly after this message" -Type E
+    .EXAMPLE
+        Write-CULog -Msg "External log contenct" -Type L
+    .NOTES
+        Author: Matthias Schlimm
+        Company:  EUCWeb.com
+        History:
+        dd.mm.yyyy MS: function created
+        07.09.2015 MS: add .SYNOPSIS to this function
+        29.09.2015 MS: add switch -SubMSg to define PreMsg string on each console line
+        21.11.2017 MS: if Error appears, exit script with Exit 1
+        08.07.2020 TT: Borrowed Write-BISFLog and modified to meet the purpose for this script
+    .LINK
+        https://eucweb.com
+    #>
+
+    Param(
+        [Parameter(Mandatory = $True)][Alias('M')][String]$Msg,
+        [Parameter(Mandatory = $False)][Alias('S')][switch]$ShowConsole,
+        [Parameter(Mandatory = $False)][Alias('C')][String]$Color = "",
+        [Parameter(Mandatory = $False)][Alias('T')][String]$Type = "",
+        [Parameter(Mandatory = $False)][Alias('B')][switch]$SubMsg
+    )
+
+    $LogType = "INFORMATION..."
+    IF ($Type -eq "W" ) { $LogType = "WARNING........."; $Color = "Yellow" }
+    IF ($Type -eq "E" ) { $LogType = "ERROR..............."; $Color = "Red" }
+
+    IF (!($SubMsg)) {
+        $PreMsg = "+"
+    }
+    ELSE {
+        $PreMsg = "`t>"
+    }
+
+    $date = Get-Date -Format G
+    if ($LogFile) {
+        Write-Output "$date | $LogType | $Msg"  | Out-file $($LogFile) -Append
+    }
+    
+
+    If (!($ShowConsole)) {
+        IF (($Type -eq "W") -or ($Type -eq "E" )) {
+            #IF ($VerbosePreference -eq 'SilentlyContinue') {
+                Write-Host "$PreMsg $Msg" -ForegroundColor $Color
+                $Color = $null
+            #}
+        }
+        ELSE {
+            Write-Verbose -Msg "$PreMsg $Msg"
+            $Color = $null
+        }
+
+    }
+    ELSE {
+        if ($Color -ne "") {
+            #IF ($VerbosePreference -eq 'SilentlyContinue') {
+                Write-Host "$PreMsg $Msg" -ForegroundColor $Color
+                $Color = $null
+            #}
+        }
+        else {
+            Write-Host "$PreMsg $Msg"
+        }
     }
 }
 
@@ -412,14 +480,14 @@ if ($HVpodstatus.status -eq "ENABLED"){
     [array]$HVpods=$objHVConnectionServer.ExtensionData.Pod.Pod_List()
     # retreive the first connection server from each pod
     $HVPodendpoints=@()
-    if ($localsiteonly -eq $true){
+    if ($LocalHVSiteOnly){
         $hvlocalpod=$hvpods | where-object {$_.LocalPod -eq $true}
         $hvlocalsite=$objHVConnectionServer.ExtensionData.Site.Site_Get($hvlocalpod.site)
         foreach ($hvpod in $hvlocalsite.pods){$HVPodendpoints+=$objHVConnectionServer.ExtensionData.PodEndpoint.PodEndpoint_list($hvpod) | select-object -first 1}
         }
 
     else {
-            [array]$HVPodendpoints = foreach ($hvpod in $hvpods) {$objHVConnectionServer.ExtensionData.PodEndpoint.PodEndpoint_List($hvpod.id) | select-object -first 1}
+            [array]$HVPodendpoints += foreach ($hvpod in $hvpods) {$objHVConnectionServer.ExtensionData.PodEndpoint.PodEndpoint_List($hvpod.id) | select-object -first 1}
     }
     # Convert from url to only the name
     [array]$hvconnectionservers=$HVPodendpoints.serveraddress.replace("https://","").replace(":8472/","")
@@ -433,12 +501,14 @@ else {
     Disconnect-HorizonConnectionServer -HVConnectionServer $objHVConnectionServer
 }
 # Get the content of the exception file and put it into an array
-if ($exceptionfile){
-    [array]$exceptionlist=get-content $exceptionfile
+if ($Exceptionsfile){
+    [array]$exceptionlist=get-content $Exceptionsfile
 }
 else {
     $exceptionlist=@()
 }
+
+
 
 $ControlUpEnvironmentObject = New-Object System.Collections.Generic.List[PSObject]
 
@@ -450,163 +520,137 @@ foreach ($hvconnectionserver in $hvconnectionservers){
         $pods=$objHVConnectionServer.extensionData.pod.Pod_list()
         [string]$podname=$pods | where-object {$_.localpod -eq $True} | select-object -expandproperty Displayname
 
-        Write-CULog -message "Processing Pod $podname"
+        Write-CULog -Msg "Processing Pod $podname"
 
         # Add folder with the podname to the batch
+        [string]$targetfolderpath="$podname"
         $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$podname" ,"$podname","Folder","","",""))
 
-        [string]$targetfolderpath=$podname
     }
     else{
         [VMware.VimAutomation.HorizonView.Impl.V1.ViewObjectImpl]$objHVConnectionServer = Connect-HorizonConnectionServer -HVConnectionServerFQDN $hvconnectionserver -Credential $CredsHorizon
-        Write-CULog -message "Processing a non Cloud Pod Architecture Environment"
+        Write-CULog -Msg "Processing a non Cloud Pod Architecture Environment"
         [string]$targetfolderpath=""
     }
-        # Get the Horizon View desktop Pools
-        [array]$HVPools = Get-HVDesktopPools -HVConnectionServer $objHVConnectionServer
+    # Get the Horizon View desktop Pools
+    [array]$HVPools = Get-HVDesktopPools -HVConnectionServer $objHVConnectionServer
+    
+
+    if($NULL -ne $hvpools){
         [array]$HVPools = $HVPools | Where-Object {$exceptionlist -notcontains $_.DesktopSummaryData.Name}
-        Write-CULog -message "Processing Dividers"
-        # Add folder for the Desktop pool divider to the batch
-        add-CUFolder -ParentPath $strpodnamepath -Name $Pooldivider -batch $batch
-        $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$Desktop Pools" ,"$podname","Folder","","$($podname)-Pod",""))
-
-        # Add folder for the RDS divider to the batch
-
-        add-CUFolder -ParentPath $strpodnamepath -name $RDSDivider -Batch $batch
-
-        # Apply the batch for the dividers
-
-        [string]$Poolspath=$strpodnamepath+"\"+$Pooldivider
+        if($targetfolderpath -eq ""){
+            [string]$Poolspath=$Pooldivider
+        }
+        else{
+            [string]$Poolspath=$targetfolderpath+"\"+$Pooldivider
+        }
+        if($ControlUpEnvironmentObject.name -notcontains $Pooldivider){
+            $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$Pooldivider" ,"$Poolspath","Folder","","$($podname)-Pod",""))
+        }
 
         # first the folders for the pools need to be created
         foreach ($hvpool in $hvpools){
             # Create the variable for the batch of machines that will be used to add and remove machines
             $poolname=($hvpool).DesktopSummaryData.Name
-            Write-CULog -message "Processing Desktop Pool $poolname"
-                Write-CULog -message "Adding folder for Desktop Pool $poolname"
-                # Defines the batch for folders
-                # Adds folder for the Desktop pool to the batch
-                add-CUFolder -ParentPath $Poolspath -Name $poolname -batch $batch
-                # count the amount of pools first
-
-
-                Write-Host "Applying batch update every $folderbatchsize folders"
-
-
-        }
-
-
-        foreach ($hvpool in $hvpools){
-            # Create the variable for the batch of machines that will be used to add and remove machines
-            $poolname=($hvpool).DesktopSummaryData.Name
-            Write-CULog -message "Processing Desktop Pool $poolname"
+            Write-CULog -Msg "Processing Desktop Pool $poolname"
             [string]$poolnamepath=$Poolspath+"\"+$poolname
-            [array]$CUComputers=@{}
-            $CUComputers=Get-CUComputers -FolderPath $poolnamepath
+            $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$poolname" ,"$poolnamepath","Folder","","$($poolname)-Pool",""))
+
             # Retreive all the desktops in the desktop pool.
             [array]$HVDesktopmachines=@{}
             $HVDesktopmachines = Get-HVDesktopMachines -HVPoolID $HVPool.id -HVConnectionServer $objHVConnectionServer
+            if($NULL -ne $HVDesktopmachines) {
             # Filtering out any desktops without a DNS name
             $HVDesktopmachines = $HVDesktopmachines | where-object {$_.base.dnsname -ne $null}
             # Remove machines in the exceptionlist
             [array]$HVDesktopmachines = $HVDesktopmachines | Where-Object {$exceptionlist -notcontains $_.base.dnsname}
-            # Create list with desktops that need to be added
-            [array]$toAddmachines = $HVDesktopmachines | Where-Object {($CUComputers).FQDN -notcontains $_.base.dnsname}
-            # Create List with desktops that need to be removed
-
-                Write-CULog -message "Adding VDI Machines actions to the batch"
-
-                foreach ($toaddmachine in $toaddmachines){
+                foreach ($HVDesktopmachine in $HVDesktopmachines){
+                    $dnsname=$HVDesktopmachine.base.dnsname
                     # Try to convert to lowercase
                     try{
-                        $toaddname=$toaddmachine.base.name.ToLower()
+                        $toaddname=$HVDesktopmachine.base.name.ToLower()
                     }
                     catch {
-                        Write-CULog -message "error converting Machine names to lowercase" -ShowConsole -Type E
+                        Write-CULog -Msg "error converting Machine names to lowercase" -ShowConsole -Type E
                     }
                     # If this is a manual non-managed pool the name equals the dnsname so we extract the name in another way.
-                    if ($toaddname -eq $toaddmachine.base.dnsname){
+                    if ($toaddname -eq $HVDesktopmachine.base.dnsname){
                         $toaddname=$toaddname.split('.')[0]
                     }
                     # Try getting the domain name from the dnsname
+
                     try{
-                        $domainname=$toaddmachine.base.dnsname.replace($toaddname+".","")
+                        $domainname=$HVDesktopmachine.base.dnsname.replace($toaddname+".","")
                     }
                     catch {
-                        Write-CULog -Message "Error retreiving the domainname from the DNS name" -ShowConsole -Type E
+                        Write-CULog -Msg "Error retreiving the domainname from the DNS name" -ShowConsole -Type E
                     }
-                    add-cucomputer -name $toaddname -domain $domainname -folderpath $poolnamepath -Batch $batch
-
+                    #add-cucomputer -name $toaddname -domain $domainname -folderpath $poolnamepath -Batch $batch
+                    $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$toaddname" ,"$poolnamepath","Computer","$domainname","$($poolname)-Pool","$dnsname"))
+                }
             }
         }
-
-        [array]$HVFarms = Get-HVfarms -HVConnectionServer $objHVConnectionServer
+    }
+    write-culog -Msg "Processing RDS Farms"
+    [array]$HVFarms = Get-HVfarms -HVConnectionServer $objHVConnectionServer
+    
+    if ($NULL -ne $hvfarms){
         [array]$HVFarms = $HVFarms | Where-Object {$exceptionlist -notcontains $_.Data.Name}
-        [string]$Farmspath=$strpodnamepath+"\"+$RDSDivider
-
-        # first the folders for the farms need to be created
-        foreach ($HVFarm in $HVFarms){
-            # Create the variable for the batch of machines that will be used to add and remove machines
-            $farmname=($hvfarm).Data.Name
-
-                Write-CULog -message "Adding folder for Desktop Pool $farmname"
-                # Defines the batch for folders
-                # Adds folder for the Desktop pool to the batch
-                add-CUFolder -ParentPath $Farmspath -Name $farmname -batch $batch
-                # count the amount of pools first
+        if($targetfolderpath -eq ""){
+            [string]$Farmspath=$RDSDivider
         }
+        else{
+            [string]$Farmspath=$targetfolderpath+"\"+$RDSDivider
+        }
+        if($ControlUpEnvironmentObject.name -notcontains $RDSDivider){
+            $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$RDSDivider" ,"$Farmspath","Folder","","$($podname)-Pod",""))
+        }
+        
+
         foreach ($HVFarm in $HVFarms){
             # Create the variable for the batch of machines that will be used to add and remove machines
             $farmname=($hvfarm).Data.Name
-            Write-CULog -message "Processing RDS Farm $farmname"
             [string]$farmnamepath=$Farmspath+"\"+$farmname
-            [array]$CUComputers=@{}
-            $CUComputers=Get-CUComputers -FolderPath $farmnamepath
+            $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$farmname" ,"$farmnamepath","Folder","","$($farmname)-Pool",""))
+            $farmname=($hvfarm).Data.Name
+            Write-CULog -Msg "Processing RDS Farm $farmname"
             # Retreive all the desktops in the desktop pool.
             [array]$HVfarmmachines=@{}
             $HVfarmmachines = Get-HVRDSMachines -HVFarmID $HVfarm.id -HVConnectionServer $objHVConnectionServer
             # Filtering out any RDS Machines without a DNS name
-            $HVfarmmachines = $HVfarmmachines | where-object {$_.AgentData.dnsname -ne $null}
-            # Remove machines in the exceptionlist
-            [array]$HVfarmmachines = $HVfarmmachines | Where-Object {$exceptionlist -notcontains $_.AgentData.dnsname}
-            # Create list with desktops that need to be added
-            [array]$toAddmachines = $HVfarmmachines | Where-Object {($CUComputers).FQDN -notcontains $_.AgentData.dnsname}
-            # Create List with desktops that need to be removed
-
-            if ($todeletemachines -or $toaddmachines){
-                Write-CULog -message "Adding RDS host actions to the batch"
-                $batch = New-CUBatchUpdate
-                $count=0
-                foreach ($toaddmachine in $toaddmachines){
+            if($HVfarmmachines -ne ""){
+                $HVfarmmachines = $HVfarmmachines | where-object {$_.AgentData.dnsname -ne $null}
+                # Remove machines in the exceptionlist
+                [array]$HVfarmmachines = $HVfarmmachines | Where-Object {$exceptionlist -notcontains $_.AgentData.dnsname}
+                # Create List with desktops that need to be removed
+                foreach ($HVfarmmachine in $HVfarmmachines){
+                    $dnsname=$HVfarmmachine.AgentData.dnsname
                     # Try to convert to lowercase
                     try {
-                        $toaddname=$toaddmachine.base.name.ToLower()
+                        $toaddname=$HVfarmmachine.base.name.ToLower()
                     }
                     catch {
-                        Write-CULog -message "error converting Machine names to lowercase" -ShowConsole -Type E
+                        Write-CULog -Msg "error converting Machine names to lowercase" -ShowConsole -Type E
                     }
                     # If this is a manual non-managed pool the name equals the dnsname so we extract the name in another way.
-                    if ($toaddname -eq $toaddmachine.AgentData.dnsname){
+                    if ($toaddname -eq $HVfarmmachine.AgentData.dnsname){
                         $toaddname=$toaddname.split('.')[0]
                     }
                     # Try getting the domain name from the dnsname
                     try {
-                        $domainname=$toaddmachine.AgentData.dnsname.replace($toaddname+".","")
+                        $domainname=$HVfarmmachine.AgentData.dnsname.replace($toaddname+".","")
                     }
                     catch {
-                        Write-CULog -Message "Error retreiving the domainname from the DNS name" -ShowConsole -Type E
+                        Write-CULog -Msg "Error retreiving the domainname from the DNS name" -ShowConsole -Type E
                     }
-                    add-cucomputer -name $toaddname -domain $domainname -folderpath $farmnamepath -Batch $batch
-
-
-
+                    $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$toaddname" ,"$farmnamepath","Computer","$domainname","$($farmname)-Farm","$dnsname"))
+                }
             }
         }
     }
-
-    }
     Disconnect-HorizonConnectionServer -HVConnectionServer $objHVConnectionServer
 }
+$ControlUpEnvironmentObject | fl
 
 $BuildCUTreeParams = @{
     CURootFolder = $folderPath
