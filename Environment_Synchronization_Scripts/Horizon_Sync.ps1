@@ -20,51 +20,34 @@
 .PARAMETER Site
     Specify a ControlUp Monitor Site to assign the objects.
 
-.PARAMETER Connection_servers
-    A list of Connection Servers to contact for Horizon Pools,Farms and Computers to sync. Multiple Connection Servers can be specified if seperated by commas.
+.PARAMETER ConnectionServer
+    FQDN for one of the connection servers.
 
-.PARAMETER includeDesktopPools
-    Include only these specific Delivery Groups to be added to the ControlUp tree. Wild cards are supported as well, so if you have 
-    Delivery Groups named like "Epic North", "Epic South" you can specify "Epic*" and it will capture both. Multiple delivery groups
-    can be specified if they are seperated by commas. If you also use the parameter "excludeDeliveryGroups" then the exclude will
-    supersede any includes and remove any matching Delivery Groups. Omitting this parameter and the script will capture all detected
-    Delivery Groups.
-
-.PARAMETER excludeDesktopPools
-    Exclude specific delivery groups from being added to the ControlUp tree. Wild cards are supported as well, so if you have 
-    Delivery Groups named like "Epic CGY", "Cerner CGY" you can specify "*CGY" and it will exclude any that ends with CGY. Multiple 
-    delivery groups can be specified if they are seperated by commas. If you also use the parameter "includeDeliveryGroup" then the exclude will
-    supersede any includes and remove any matching Delivery Groups.
-
-.PARAMETER LocalPodOnly
-    Configures the script to sync only the local Pod to ControlUp
-
-.PARAMETER LocalSiteOnly
+.PARAMETER LocalHVSiteOnly
     Configures the script to sync only the local Site to ControlUp
 
 .EXAMPLE
-    . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local","ctxdc01.bottheory.local" -folderPath "CUSync\Citrix" -includeDeliveryGroup "EpicNorth","EpicSouth","EpicCentral","Cerner*" -excludeDeliveryGroup "CernerNorth" -addBrokersToControlUp -MatchEUCEnvTree
-        Contacts the brokers ddc1.bottheory.local and ctxdc01.bottheory.local, it will save the objects to the ControlUp folder 
-        "CUSync\Citrix", only include specific Delivery Groups including all Delivery Groups that start wtih Cerner and exclude
-        the Delivery Group "CernerNorth", adds the broker machines to ControlUp, have the script match the same structure as
-        the ControlUp EUC Environment.
+    . .\CU_SyncScript.ps1 -ConnectionServer "connectionserver.domain.example" -folderPath "CUSync\Horizon" 
+        Contacts the connection server connectionserver.domain.example, discover and connect to all other pods in the cloud pod federation. Tt will save the objects to the ControlUp folder 
+        "CUSync\Horizon". I
 
 .EXAMPLE
-    . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local" -folderPath "CUSync"
-        Contacts the brokers ddc1.bottheory.local and adds all Delivery Groups and their machines to ControlUp under the folder "CUSync"
+    \CU_SyncScript.ps1 -ConnectionServer "connectionserver.domain.example" -folderPath "CUSync\Horizon" -localHVsite only
+        Contacts the connection server connectionserver.domain.example, discover and connect to all other pods in the local Site in the cloud pod federation. It will save the objects to the ControlUp folder 
+        "CUSync\Horizon".
 
 .CONTEXT
     VMware Horizon
 
 .MODIFICATION_HISTORY
-    Wouter Kursten,         2020-08-11 - Original Code
+    Wouter Kursten,         2020-08-18 - Original Code
 
 .LINK
 
 .COMPONENT
 
 .NOTES
-    Requires rights to read Citrix environment.
+    Requires rights to connect to the Horizon API's and read the Horizon environment.
 
     Version:        0.1
     Author:         Wouter Kursten
@@ -99,7 +82,7 @@ Param
         HelpMessage='FQDN of the connectionserver'
     )]
     [ValidateNotNullOrEmpty()]
-    [string] $HVConnectionServerFQDN,
+    [string] $ConnectionServer,
 
     [Parameter(
         Position=3, 
@@ -152,9 +135,9 @@ Set-StrictMode -Version Latest
 
 $Pooldivider="Desktop Pools"
 $RDSDivider="RDS Farms"
+
 # dot sourcing Functions
 . ".\Build-CUTree.ps1"
-
 
 function Make-NameWithSafeCharacters ([string]$string) {
     ###### TODO need to replace the folder path characters that might be illegal
@@ -452,7 +435,7 @@ Load-VMwareModules -Components @('VimAutomation.HorizonView')
 [PSCredential]$CredsHorizon = Get-CUStoredCredential -System 'HorizonView'
 
 # Connect to the Horizon View Connection Server
-[VMware.VimAutomation.HorizonView.Impl.V1.ViewObjectImpl]$objHVConnectionServer = Connect-HorizonConnectionServer -HVConnectionServerFQDN $HVConnectionServerFQDN -Credential $CredsHorizon
+[VMware.VimAutomation.HorizonView.Impl.V1.ViewObjectImpl]$objHVConnectionServer = Connect-HorizonConnectionServer -HVConnectionServerFQDN $ConnectionServer -Credential $CredsHorizon
 
 #Create ControlUp structure object for synchronizing
 class ControlUpObject{
@@ -507,8 +490,6 @@ if ($Exceptionsfile){
 else {
     $exceptionlist=@()
 }
-
-
 
 $ControlUpEnvironmentObject = New-Object System.Collections.Generic.List[PSObject]
 
@@ -605,7 +586,6 @@ foreach ($hvconnectionserver in $hvconnectionservers){
         if($ControlUpEnvironmentObject.name -notcontains $RDSDivider){
             $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$RDSDivider" ,"$Farmspath","Folder","","$($podname)-Pod",""))
         }
-        
 
         foreach ($HVFarm in $HVFarms){
             # Create the variable for the batch of machines that will be used to add and remove machines
