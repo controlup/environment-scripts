@@ -327,7 +327,9 @@ function Build-CUTree {
         ## For debugging uncomment
         $ErrorActionPreference = 'Stop'
         $VerbosePreference = 'SilentlyContinue'
-        $DebugPreference = 'SilentlyContinue'        Set-StrictMode -Version Latest        #>
+        $DebugPreference = 'SilentlyContinue'
+        Set-StrictMode -Version Latest
+        #>
 
         $startTime = Get-Date
 
@@ -546,7 +548,12 @@ function Build-CUTree {
                         $ComputersAddBatch = New-CUBatchUpdate
                     }
                 
-    	        Add-CUComputer -Domain $ExtComputer.Domain -Name $ExtComputer.Name -FolderPath "$($ExtComputer.FolderPath)" -Batch $ComputersAddBatch @SiteIdParam
+    	        try {
+                         Add-CUComputer -Domain AcmeOnAzure.onmicrosoft.com -Name wvd-20spr-2 -FolderPath "a.c.m.e.\VDI_and_SBC\WVD\Pay-As-You-Go Dev-Test\Spring2020WVD" -Batch $batch
+                } catch {
+                         Write-CULog "Error while attempting to run Add-CUComputer" -ShowConsole -Type E
+                         Write-CULog "$($Error[0])"  -ShowConsole -Type E
+                }
                 if ($PSBoundParameters.ContainsKey("SiteId")) {
                     $MachinesToAdd.Add("Add-CUComputer -Domain $($ExtComputer.Domain) -Name $($ExtComputer.Name) -FolderPath `"$($ExtComputer.FolderPath)`" -SiteId $SiteIdGUID")
                 } else {
