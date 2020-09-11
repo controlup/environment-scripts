@@ -1,3 +1,4 @@
+
 ﻿<#
     .SYNOPSIS
 	    Synchronizes ControlUp folder structure with an external source (Active Directory, Citrix, Horizon, WVD)
@@ -548,7 +549,12 @@ function Build-CUTree {
                         $ComputersAddBatch = New-CUBatchUpdate
                     }
                 
-
+    	        try {
+                         Add-CUComputer -Domain AcmeOnAzure.onmicrosoft.com -Name wvd-20spr-2 -FolderPath "a.c.m.e.\VDI_and_SBC\WVD\Pay-As-You-Go Dev-Test\Spring2020WVD" -Batch $batch
+                } catch {
+                         Write-CULog "Error while attempting to run Add-CUComputer" -ShowConsole -Type E
+                         Write-CULog "$($Error[0])"  -ShowConsole -Type E
+                }
                 if ($PSBoundParameters.ContainsKey("SiteId")) {
                     $MachinesToAdd.Add("Add-CUComputer -Domain $($ExtComputer.Domain) -Name $($ExtComputer.Name) -FolderPath `"$($ExtComputer.FolderPath)`" -SiteId $SiteIdGUID")
                 } else {
