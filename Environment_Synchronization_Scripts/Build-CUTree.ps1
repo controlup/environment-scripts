@@ -550,7 +550,7 @@ function Build-CUTree {
                     }
                 
     	        try {
-                         Add-CUComputer -Domain AcmeOnAzure.onmicrosoft.com -Name wvd-20spr-2 -FolderPath "a.c.m.e.\VDI_and_SBC\WVD\Pay-As-You-Go Dev-Test\Spring2020WVD" -Batch $batch
+                         Add-CUComputer -Domain $ExtComputer.Domain -Name $ExtComputer.Name -FolderPath "$($ExtComputer.FolderPath)" -Batch $ComputersAddBatch @SiteIdParam
                 } catch {
                          Write-CULog "Error while attempting to run Add-CUComputer" -ShowConsole -Type E
                          Write-CULog "$($Error[0])"  -ShowConsole -Type E
