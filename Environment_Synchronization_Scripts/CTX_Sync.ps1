@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Creates the folder structure and adds/removes or moves machines into the structure.
 
@@ -399,4 +399,3 @@ if ($Site){
 }
 
 Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams
-
