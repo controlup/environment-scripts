@@ -335,9 +335,40 @@ function Build-CUTree {
 
         #region Load ControlUp PS Module
         try {
+            ## Check CU monitor is installed and at least minimum required version
+            [string]$cuMonitor = 'ControlUp Monitor'
+            [version]$minimumCUmonitorVersion = '8.1.5.600'
+            if( ! ( $installKey = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -Name DisplayName -ErrorAction SilentlyContinue| Where-Object DisplayName -eq $cuMonitor ) )
+            {
+                Write-Error -Message "$cuMonitor does not appear to be installed"
+                break
+            }
 	        # Importing the latest ControlUp PowerShell Module
-	        $pathtomodule = (Get-ChildItem "$($env:ProgramFiles)\Smart-X\ControlUpMonitor\*\ControlUp.PowerShell.User.dll" -Recurse | Sort-Object LastWriteTime -Descending)[0]
-	        Import-Module $pathtomodule
+	        if( ! ( $pathtomodule = (Get-ChildItem "$($env:ProgramFiles)\Smart-X\ControlUpMonitor\*\ControlUp.PowerShell.User.dll" -Recurse -Force | Sort-Object -Property VersionInfo.FileVersion -Descending) | Select-Object -First 1 ) )
+            {
+                Write-Error -Message "Unable to find ControlUp.PowerShell.User.dll"
+                break
+            }
+            ## dll version is 1.0.0.0 so we check cuMonitor.exe
+            if( $cuMonitorExeProperties = Get-ChildItem -Path (Join-Path -Path $pathtomodule.DirectoryName -ChildPath 'cuMonitor.exe') -Force -ErrorAction SilentlyContinue )
+            {
+                if( $cuMonitorExeProperties.VersionInfo.FileVersion -lt $minimumCUmonitorVersion )
+                {
+                    Write-Warning -Message "Found version $($cuMonitorExeProperties.VersionInfo.FileVersion) of cuMonitor.exe but need at least $($minimumCUmonitorVersion.ToString())"
+                }
+            }
+            else
+            {
+                Write-Warning -Message "Unable to find cuMonitor.exe in folder `"$($pathtomodule.DirectoryName)`""
+            }
+	        if( ! ( Import-Module $pathtomodule -PassThru ) )
+            {
+                break
+            }
+            if( ! ( Get-Command -Name 'Get-CUFolders' -ErrorAction SilentlyContinue ) )
+            {
+                Write-Error -Message "Loaded CU Monitor PowerShell module but unable to find cmdlet Get-CUFolders"
+            }
         }
         catch {
             Write-CULog -Msg 'The required ControlUp PowerShell module was not found or could not be loaded. Please make sure this is a ControlUp Monitor machine.' -ShowConsole -Type E
@@ -389,7 +420,7 @@ function Build-CUTree {
             try {
                 $CUFolders   = Get-CUFolders # add a filter on path so only folders within the rootfolder are used
             } catch {
-                Write-Error "Unable to get computers from ControlUp"
+                Write-Error "Unable to get folders from ControlUp"
                 break
             }
         } else {
@@ -459,15 +490,20 @@ function Build-CUTree {
             $obj.FolderPath = "$("$OrganizationName\$CURootFolder")\$objectFolderPath"
         }
 
-        #We also create a hashtable to improve lookup performance for large organizations.
+        #We also create a hashtable to improve lookup performance for computers in large organizations.
         $ExtTreeHashTable = @{}
+        $ExtFolderPaths = New-Object -TypeName System.Collections.Generic.List[psobject]
         foreach ($ExtObj in $externalTree) {
             foreach ($obj in $ExtObj) {
-                $ExtTreeHashTable.Add($Obj.Name, $obj)
+                ## GRL only add computers since that is all we look up and get duplicate error if OU and computer have the same name
+                if( $obj.Type -eq 'Computer' ) {
+                    $ExtTreeHashTable.Add($Obj.Name, $obj)
+                }
+                else {
+                    $ExtFolderPaths.Add( $obj )
+                }
             }
         }
-
-        $ExtFolderPaths = $externalTree.Where{$_.Type -eq "Folder"}
 
         Write-CULog -Msg "Target Folder Paths:" -ShowConsole
         if ($ExtFolderPaths.count -ge 25) {

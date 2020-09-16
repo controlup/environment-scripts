@@ -1,4 +1,5 @@
-﻿<#
+﻿#requires -version 5
+<#
 .SYNOPSIS
     Creates the folder structure and adds/removes or moves machines into the structure.
 .DESCRIPTION
@@ -32,7 +33,7 @@ Param
     [Parameter(
         Position=0, 
         Mandatory=$true, 
-        HelpMessage='Enter a ControlUp subfolder to save your WVD tree'
+        HelpMessage='Enter a ControlUp subfolder to save your WVD tree' ## GRL WVD??
     )]
     [ValidateNotNullOrEmpty()]
     [string] $folderPath,
@@ -78,20 +79,21 @@ Param
     [string] $Site
 ) 
 
+## GRL this way allows script to be run with debug/verbose without changing script
+$VerbosePreference = $(if( $PSBoundParameters[ 'verbose' ] ) { $VerbosePreference } else { 'SilentlyContinue' })
+$DebugPreference = $(if( $PSBoundParameters[ 'debug' ] ) { $DebugPreference } else { 'SilentlyContinue' })
+$ErrorActionPreference = $(if( $PSBoundParameters[ 'erroraction' ] ) { $ErrorActionPreference } else { 'Stop' })
+$ProgressPreference = 'SilentlyContinue'
 
-<#
-## For debugging uncomment
-$ErrorActionPreference = 'Stop'
-$VerbosePreference = 'continue'
-$DebugPreference = 'SilentlyContinue'
-Set-StrictMode -Version Latest
-#>
+## Script from ControlUp which must reside in the same folder as this script
+[string]$buildCuTreeScript = 'Build-CUTree.ps1'
+
 function Make-NameWithSafeCharacters ([string]$string) {
     #list of illegal characters : '/', '\', ':', '*','?','"','<','>','|','{','}'
     $returnString = (($string).Replace("/","-")).Replace("\","-").Replace(":","-").Replace("*","-").Replace("?","-").Replace("`"","-").Replace("<","-").Replace(">","-").Replace("|","-").Replace("{","-").Replace("}","-")
     return $returnString
 }
-    
+## GRL This needs PoSH 5.0 minimum so is it worth it rather than just using PSObjects?
 #Create ControlUp structure object for synchronizing
 class ControlUpObject{
     [string]$Name
@@ -202,7 +204,7 @@ Function Get-ObjectsInOU {
         [Parameter(
             Position=0, 
             Mandatory=$true, 
-            HelpMessage='Enter a organizational unit'
+            HelpMessage='Enter an organizational unit'
         )]
         [ValidateNotNullOrEmpty()]
         [string] $DistinguishedName
@@ -226,9 +228,8 @@ Function Get-ObjectsInOU {
         Write-Verbose "Searching $($DistinguishedName)"
         $SearchStartTime = Get-Date
         #Write-Verbose "$SearchStartTime"
-        foreach ($result in $Search.FindAll()) {
-            $OUCollectionObj.Add($result)
-        }
+        $Search.FindAll().ForEach( { $OUCollectionObj.Add( $_ ) } )
+    
         $SearchEndTime = Get-Date
         #Write-Verbose "$SearchEndTime"
         Write-Verbose "Searching $($DistinguishedName) found $($OUCollectionObj.count) objects in $($($SearchEndTime.Second - $SearchStartTime.Second)) seconds"
@@ -268,9 +269,9 @@ Function Convert-LDAPPathToPath {
                 if ($obj.Contains($CharsToEscape)) {      
                     foreach ($char in $CharsToEscape) {
                         if ($char -eq "\") {
-                            $obj = $obj.replace("\$char","$char") #escape out the escape backslash differently
+                            $obj = $obj.replace("\$char", $char ) #escape out the escape backslash differently
                         } else {
-                            $obj = $obj.replace("`\$char","$char")
+                            $obj = $obj.replace("`\$char", $char )
                         }
                     }
                 }
@@ -294,36 +295,51 @@ Function Convert-LDAPPathToPath {
         }
     }
 }
-
 #endregion
 
 # dot sourcing Functions
-. ".\Build-CUTree.ps1"
-        
+## GRL Don't assume user has changed location so get the script path instead
+[string]$scriptPath = Split-Path -Path (& { $myInvocation.ScriptName }) -Parent
+[string]$buildCuTreeScriptPath = [System.IO.Path]::Combine( $scriptPath , $buildCuTreeScript )
 
-$ADEnvironment = New-Object System.Collections.Generic.List[PSObject]
+if( ! ( Test-Path -Path $buildCuTreeScriptPath -PathType Leaf -ErrorAction SilentlyContinue ) )
+{
+    Throw "Unable to find script `"$buildCuTreeScript`" in `"$scriptPath`""
+}
+
+. $buildCuTreeScriptPath       
+
+$ADEnvironment = New-Object -TypeName System.Collections.Generic.List[PSObject]
 
 #region Generate ControlUpObject that will be used to Add objects into ControlUp.
 Write-Host "Getting OU Object: $OU" -foregroundColor Yellow
-$RootOU = Get-OU -DistinguishedName $OU
-$OUObjects = Get-ObjectsInOU -DistinguishedName $OU
-$RootPath = Convert-LDAPPathToPath -LDAPPath $RootOU.Path
+if( ! ( $RootOU = Get-OU -DistinguishedName $OU ) )
+{
+    Throw "Failed to locate OU $OU"
+}
+
+if( ! ( $OUObjects = Get-ObjectsInOU -DistinguishedName $OU ) -or ! $OUObjects.Count )
+{
+    Throw "Found no objects in OU $OU"
+}
+
+[string]$RootPath = Convert-LDAPPathToPath -LDAPPath $RootOU.Path
 Write-Verbose "RootPath: $RootPath"
-$RootFolder = $RootPath.Split("\")[-1]
-$OUCounts = $ListOfOUs.count
-$ListOfOUsTimer = Measure-Command { $ListOfOUs =  $OUObjects.Where({$_.properties.objectcategory -like "*organizational-Unit*"}) }
+[string]$RootFolder = $RootPath.Split("\")[-1]
+[System.TimeSpan]$ListOfOUsTimer = Measure-Command { $ListOfOUs =  $OUObjects.Where( { $_.properties.objectcategory -like "*organizational-Unit*" } ) }
+[int]$OUCounts = $ListOfOUs.count
 Write-Verbose "Found $($OUCounts) OUs in $($ListOfOUsTimer.TotalSeconds) seconds"
 
 
 #find AD OU's to be made into ControlUp folders:
-$ConvertOU_ToFoldersTimer = Measure-Command {
+[System.TimeSpan]$ConvertOU_ToFoldersTimer = Measure-Command {
 [int]$OUCount = 0
 [Console]::WriteLine("$((get-date).ToLongTimeString()) : Processing $OUCounts OU's...")
     foreach ($OUObject in $ListOfOUs) {
         if (0 -eq $OUCount % 10) {
             [Console]::WriteLine("$((get-date).ToLongTimeString()) : Processed $OUCount / $($OUCounts)...")
         }
-        $OUObjectPath = Convert-LDAPPathToPath -LDAPPath $OUObject.Path  # Get the Path in the format we require
+        [string]$OUObjectPath = Convert-LDAPPathToPath -LDAPPath $OUObject.Path  # Get the Path in the format we require
         $OUObjectPath = $OUObjectPath.Replace("$RootPath","")            # Remove the RootPath of the LDAP structure
         $OUObjectPath = $RootFolder + $OUObjectPath                      # Re-add the RootFolder (You can probably remove this if you want to add the machines directly to the root of the targetFolder
         $FolderName = $OUObjectPath.Split("\")[-1]                       # Folder name in ControlUp
@@ -332,6 +348,7 @@ $ConvertOU_ToFoldersTimer = Measure-Command {
         $OUCount++
     }
 }
+## GRL Why do we have Write-Host and [Console]::WriteLine ?
 [Console]::WriteLine("$((get-date).ToLongTimeString()) : Processed $($OUCounts) / $($OUCounts)...")
 
 Write-Verbose "Converting OUs to ControlUp Folder Import objects took $($ConvertOU_ToFoldersTimer.TotalSeconds) seconds"
@@ -352,9 +369,9 @@ $ConvertComputer_ToCUComputersTimer = Measure-Command {
         $CompObjectPath = $RootFolder + $CompObjectPath                       # Re-add the RootFolder (You can probably remove this if you want to add the machines directly to the root of the targetFolder
         $ComputerName = $CompObjectPath.Split("\")[-1]                        # Computer name in ControlUp
         $CompObjectPath = $CompObjectPath.Replace("\$ComputerName","")        # Remove computer name from the folder path
-        $CompObjectDNSName = $CompObject.Properties.dnshostname               # DNS Name
+        $CompObjectDNSName = $CompObject.Properties[ 'dnshostname' ]          # DNS Name
 
-        $ADEnvironment.Add([ControlUpObject]::new($ComputerName ,"$CompObjectPath","Computer","$CanonicalNameOfDomain","AD Computer","$CompObjectDNSName"))
+        $ADEnvironment.Add( ([ControlUpObject]::new( $ComputerName , $CompObjectPath ,"Computer", $CanonicalNameOfDomain , "AD Computer", $CompObjectDNSName )))
         $compCount++
     }
 }
@@ -405,6 +422,3 @@ Build-CUTree -ExternalTree $ADEnvironment @BuildCUTreeParams
 
 
 #endregion WVD
-
-
-
