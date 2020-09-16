@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Creates the folder structure and adds/removes or moves machines into the structure.
 
@@ -175,7 +175,8 @@ $ErrorActionPreference = 'Stop'
 $VerbosePreference = 'continue'
 #$DebugPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
-
+
+
 function Make-NameWithSafeCharacters ([string]$string) {
     ###### TODO need to replace the folder path characters that might be illegal
     #list of illegal characters : '/', '\', ':', '*','?','"','<','>','|','{','}'
