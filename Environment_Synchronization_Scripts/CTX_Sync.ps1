@@ -168,14 +168,15 @@ Param
     [switch] $addBrokersToControlUp
 ) 
 
+## GRL this way allows script to be run with debug/verbose without changing script
+$VerbosePreference = $(if( $PSBoundParameters[ 'verbose' ] ) { $VerbosePreference } else { 'SilentlyContinue' })
+$DebugPreference = $(if( $PSBoundParameters[ 'debug' ] ) { $DebugPreference } else { 'SilentlyContinue' })
+$ErrorActionPreference = $(if( $PSBoundParameters[ 'erroraction' ] ) { $ErrorActionPreference } else { 'Stop' })
+$ProgressPreference = 'SilentlyContinue'
 
+## Script from ControlUp which must reside in the same folder as this script
+[string]$buildCuTreeScript = 'Build-CUTree.ps1'
 
-## For debugging uncomment
-$ErrorActionPreference = 'Stop'
-$VerbosePreference = 'continue'
-#$DebugPreference = 'SilentlyContinue'
-Set-StrictMode -Version Latest
-
 function Make-NameWithSafeCharacters ([string]$string) {
     ###### TODO need to replace the folder path characters that might be illegal
     #list of illegal characters : '/', '\', ':', '*','?','"','<','>','|','{','}'
@@ -202,9 +203,20 @@ class ControlUpObject{
 }
 
 # dot sourcing Functions
-. ".\Build-CUTree.ps1"
+
+## GRL Don't assume user has changed location so get the script path instead
+[string]$scriptPath = Split-Path -Path (& { $myInvocation.ScriptName }) -Parent
+[string]$buildCuTreeScriptPath = [System.IO.Path]::Combine( $scriptPath , $buildCuTreeScript )
+
+if( ! ( Test-Path -Path $buildCuTreeScriptPath -PathType Leaf -ErrorAction SilentlyContinue ) )
+{
+    Throw "Unable to find script `"$buildCuTreeScript`" in `"$scriptPath`""
+}
+
+. $buildCuTreeScriptPath
 
 # Add Citrix snap-ins
+## GRL SHould review this as more recent releases have modules
 Add-PSSnapin -Name Citrix*
 
 Write-Host "Brokers: $Brokers"
@@ -326,7 +338,7 @@ foreach ($DeliveryGroup in $DeliveryGroups) {
             }
             $Domain = $Machine.MachineName.split("\")[0]
             $Name =$Machine.MachineName.split("\")[1]
-            $ControlUpEnvironmentObject.Add([ControlUpObject]::new($($Name) ,"$($DeliveryGroup.Name)","Computer","$Domain","$($DeliveryGroup.site)-Machine","$DNSName"))
+            $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new($($Name) ,"$($DeliveryGroup.Name)","Computer","$Domain","$($DeliveryGroup.site)-Machine","$DNSName")) )
         }
     }
 }
@@ -344,7 +356,7 @@ if ($addBrokersToControlUp) {
         }
         $Domain = $Machine.MachineName.split("\")[0]
         $Name =$Machine.MachineName.split("\")[1]
-        $ControlUpEnvironmentObject.Add([ControlUpObject]::new($($Name) ,"Brokers","Computer","$Domain","$($Machine.site)-BrokerMachine","$DNSName"))
+        $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new($($Name) ,"Brokers","Computer","$Domain","$($Machine.site)-BrokerMachine","$DNSName")))
     }
 }
 ## TYE
@@ -359,12 +371,12 @@ if ($MatchEUCEnvTree) {
     }
     if ($addBrokersToControlUp) {
         foreach ($CtxSite in $($CTXSites | Sort-Object -Unique)) {
-            $ControlUpEnvironmentObject.Add([ControlUpObject]::new("Brokers" ,"$($CTXSite.Name)\Brokers","Folder","","Brokers",""))
+            $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new("Brokers" ,"$($CTXSite.Name)\Brokers","Folder","","Brokers","")))
         }
     }
 }
 
-Write-Debug "$($ControlUpEnvironmentObject | ft | Out-String)"
+Write-Debug "$($ControlUpEnvironmentObject | Format-Table | Out-String)"
 
 $BuildCUTreeParams = @{
     CURootFolder = $folderPath

@@ -377,12 +377,13 @@ function Build-CUTree {
 
 
         #region validate SiteId parameter
+        [hashtable] $SiteIdParam = @{}
         if ($PSBoundParameters.ContainsKey("SiteId")) {
             Write-CULog -Msg "Assigning resources to specific site: $SiteId" -ShowConsole
             $Sites = Get-CUSites
             $SiteIdGUID = ($Sites.Where{$_.Name -eq $SiteId}).Id
             Write-CULog -Msg "SiteId GUID: $SiteIdGUID" -ShowConsole -SubMsg
-            $SiteIdParam = @{SiteId = $SiteIdGUID}
+            $SiteIdParam.Add( 'SiteId' , $SiteIdGUID )
         }
 
 
@@ -407,7 +408,7 @@ function Build-CUTree {
             }
         }
         
-        Write-CULog -Msg  "CU Computers Count: $($CUComputers.count)" -ShowConsole -Color Cyan
+        Write-CULog -Msg  "CU Computers Count: $(if( $CUComputers ) { $CUComputers.count } else { 0 } )" -ShowConsole -Color Cyan
         #create a hashtable out of the CUMachines object as it's much faster to query. This is critical when looking up Machines when ControlUp contains ten's of thousands of machines.
         $CUComputersHashTable = @{}
         foreach ($machine in $CUComputers) {
