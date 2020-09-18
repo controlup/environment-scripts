@@ -272,7 +272,7 @@ function Build-CUTree {
             )
             $batchCount = 1
             foreach ($batch in $BatchObject) {
-                Write-CULog -Msg "$Message. Batch $batchCount/$($BatchObject.count)" -ShowConsole -Color Red -SubMsg
+                Write-CULog -Msg "$Message. Batch $batchCount/$($BatchObject.count)" -ShowConsole -Color DarkYellow -SubMsg
                 if (-not($preview)) {
                     $PublishTime = Measure-Command { Publish-CUUpdates $batch }
                     Write-CULog -Msg "Execution Time: $($PublishTime.TotalSeconds)" -ShowConsole -Color Green -SubMsg
@@ -683,7 +683,7 @@ function Build-CUTree {
             }
         } else {
             foreach ($obj in $FoldersToRemove) {
-                Write-CULog -Msg "$obj" -ShowConsole -Color Red -SubMsg
+                Write-CULog -Msg "$obj" -ShowConsole -Color DarkYellow -SubMsg
             }
         }
 
@@ -719,7 +719,7 @@ function Build-CUTree {
             }
         } else {
             foreach ($obj in $MachinesToRemove) {
-                Write-CULog -Msg "$obj" -ShowConsole -Color Red -SubMsg
+                Write-CULog -Msg "$obj" -ShowConsole -Color DarkYellow -SubMsg
             }
         }
             
@@ -727,7 +727,7 @@ function Build-CUTree {
         $endTime = Get-Date
 
         Write-CULog -Msg "Build-CUTree took: $($(New-TimeSpan -Start $startTime -End $endTime).Seconds) Seconds." -ShowConsole -Color White
-        Write-CULog -Msg "Committing Changes:" -ShowConsole -Color Red
+        Write-CULog -Msg "Committing Changes:" -ShowConsole -Color DarkYellow
         if ($ComputersRemoveBatches.Count -gt 0) { Execute-PublishCUUpdates -BatchObject $ComputersRemoveBatches -Message "Executing Computer Object Removal" }
         if ($FoldersToRemoveBatches.Count -gt 0) { Execute-PublishCUUpdates -BatchObject $FoldersToRemoveBatches -Message "Executing Folder Object Removal"   }
         if ($FolderAddBatches.Count -gt 0)       { Execute-PublishCUUpdates -BatchObject $FolderAddBatches -Message "Executing Folder Object Adds"            }

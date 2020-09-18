@@ -68,6 +68,7 @@
 
 .MODIFICATION_HISTORY
     Trentent Tye,         2020-08-06 - Original Code
+    Guy Leech,            2020-09-16 - Fix missing siteid hashtable, changed from dot sourcing common module from cwd to same path as this sript
 
 .LINK
 
