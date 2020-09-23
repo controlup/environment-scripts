@@ -279,14 +279,19 @@ function Build-CUTree {
                     $result = Publish-CUUpdates -Batch $batch 
                     [datetime]$timeAfter = [datetime]::Now
                     [array]$results = @( Show-CUBatchResult -Batch $batch )
-                    [int]$failures = $results.Where( { $_.IsSuccess -eq $false -and $_.ErrorDescription -notmatch 'Folder with the same name already exists' } ).Count
-                    if( $failures -gt 0 )
-                    {
-                        Write-Warning -Message "Got $failures / $($results.Count) failures in batch"
-                    }
+                    [array]$failures = $results.Where( { $_.IsSuccess -eq $false -and $_.ErrorDescription -notmatch 'Folder with the same name already exists' } )
+
                     Write-CULog -Msg "Execution Time: $(($timeAfter - $timeBefore).TotalSeconds) seconds" -ShowConsole -Color Green -SubMsg
                     Write-CULog -Msg "Result: $result" -ShowConsole -Color Green -SubMsg
-                    Write-CULog -Msg "Failures: $failures / $($results.Count)" -ShowConsole -Color Green -SubMsg
+                    Write-CULog -Msg "Failures: $($failures.Count) / $($results.Count)" -ShowConsole -Color Green -SubMsg
+
+                    if( $failures -and $failures.Count -gt 0 )
+                    {
+                        ForEach( $failure in $failures )
+                        {
+                            Write-CULog -Msg "Action $($failure.ActionName) on `"$($failure.Subject)`" gave error $($failure.ErrorDescription) ($($failure.ErrorCode))" -ShowConsole -Type E
+                        }
+                    }
                 } else {
                     Write-CULog -Msg "Execution Time: PREVIEW MODE" -ShowConsole -Color Green -SubMsg
                 }
@@ -725,7 +730,5 @@ function Build-CUTree {
         if ($FolderAddBatches.Count -gt 0)       { Execute-PublishCUUpdates -BatchObject $FolderAddBatches -Message "Executing Folder Object Adds"            }
         if ($ComputersAddBatches.Count -gt 0)    { Execute-PublishCUUpdates -BatchObject $ComputersAddBatches -Message "Executing Computer Object Adds"       }
         if ($ComputersMoveBatches.Count -gt 0)   { Execute-PublishCUUpdates -BatchObject $ComputersMoveBatches -Message "Executing Computer Object Moves"     }
-
-    }
-    
+    }   
 }

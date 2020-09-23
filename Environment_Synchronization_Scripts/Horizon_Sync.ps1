@@ -58,7 +58,7 @@
 
 .MODIFICATION_HISTORY
     Wouter Kursten,         2020-08-11 - Original Code
-
+    Guy Leech               2020-09-23 - Added more logging for fatal errors to aid troubleshooting when run as ascheduled task
 .LINK
 
 .COMPONENT
@@ -161,7 +161,9 @@ $ProgressPreference = 'SilentlyContinue'
 
 if( ! ( Test-Path -Path $buildCuTreeScriptPath -PathType Leaf -ErrorAction SilentlyContinue ) )
 {
-    Throw "Unable to find script `"$buildCuTreeScript`" in `"$scriptPath`""
+    [string]$errorMessage = "Unable to find script `"$buildCuTreeScript`" in `"$scriptPath`""
+    Write-CULog -Msg $errorMessage -ShowConsole -Type E
+    Throw $errorMessage
 }
 
 . $buildCuTreeScriptPath
@@ -184,7 +186,9 @@ function Get-CUStoredCredential {
     [string]$strCUCredFile = Join-Path -Path "$strCUCredFolder" -ChildPath "$($env:USERNAME)_$($System)_Cred.xml"
     if( ! ( Test-Path -Path $strCUCredFile -ErrorAction SilentlyContinue ) )
     {
-        Throw "Unable to find stored credential file `"$strCUCredFile`" - have you previously run the `"Create Credentials for Horizon Scripts`" script for user $env:username ?"
+        [string]$errorMessage = "Unable to find stored credential file `"$strCUCredFile`" - have you previously run the `"Create Credentials for Horizon Scripts`" script for user $env:username ?"
+        Write-CULog -Msg $errorMessage -ShowConsole -Type E
+        Throw $errorMessage
     }
     else
     {
@@ -194,7 +198,9 @@ function Get-CUStoredCredential {
         }
         Catch
         {
-            Throw "Error reading stored credentials from `"$strCUCredFile`" : $_"
+            [string]$errorMessage = "Error reading stored credentials from `"$strCUCredFile`" : $_"
+            Write-CULog -Msg $errorMessage -ShowConsole -Type E
+            Throw $errorMessage
         }
     }
 }
@@ -254,7 +260,7 @@ function Connect-HorizonConnectionServer {
         Connect-HVServer -Server $HVConnectionServerFQDN -Credential $Credential
     }
     catch {
-        Write-CULog -Msg 'There was a problem connecting to the Horizon View Connection server.' -ShowConsole -Type E
+        Write-CULog -Msg "There was a problem connecting to the Horizon View Connection server: $_" -ShowConsole -Type E
     }
 }
 
@@ -478,11 +484,20 @@ Load-VMwareModules -Components @('VimAutomation.HorizonView')
 
 if( ! $CredsHorizon )
 {
-    Throw "Failed to get stored credentials for $env:username for HorizonView"
+    [string]$errorMessage = "Failed to get stored credentials for $env:username for HorizonView"
+    Write-CULog -Msg $errorMessage -ShowConsole -Type E
+    Throw $errorMessage
 }
 
 # Connect to the Horizon View Connection Server
 [VMware.VimAutomation.HorizonView.Impl.V1.ViewObjectImpl]$objHVConnectionServer = Connect-HorizonConnectionServer -HVConnectionServerFQDN $HVConnectionServerFQDN -Credential $CredsHorizon
+
+if( ! $objHVConnectionServer )
+{
+    [string]$errorMessage = "Failed to connect to Horizon Connection Server $HVConnectionServerFQDN as $($CredsHorizon.UserName)"
+    Write-CULog -Msg $errorMessage -ShowConsole -Type E
+    Throw $errorMessage
+}
 
 #Create ControlUp structure object for synchronizing
 class ControlUpObject{
