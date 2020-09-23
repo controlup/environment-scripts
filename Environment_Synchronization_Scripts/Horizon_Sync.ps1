@@ -532,7 +532,7 @@ else {
 }
 # Get the content of the exception file and put it into an array
 if ($Exceptionsfile){
-    [array]$exceptionlist=get-content $Exceptionsfile
+    [array]$exceptionlist=get-content -Path $Exceptionsfile
 }
 else {
     $exceptionlist=@()
@@ -567,6 +567,9 @@ foreach ($hvconnectionserver in $hvconnectionservers){
     
 
     if($NULL -ne $hvpools){
+        Write-CULog -Msg "Pools count is $($HVPools.Count) before applying exception list of $($exceptionlist.Count)"
+        [array]$HVPools = @( $HVPools.Where( { $exceptionlist -notcontains $_.DesktopSummaryData.Name} ) )
+        Write-CULog -Msg "Pools count is $($HVPools.Count) after  applying exception list of $($exceptionlist.Count)"
         [array]$HVPools = @( $HVPools.Where( { $exceptionlist -notcontains $_.DesktopSummaryData.Name} ) )
         if($targetfolderpath -eq ""){
             [string]$Poolspath=$Pooldivider
@@ -592,7 +595,9 @@ foreach ($hvconnectionserver in $hvconnectionservers){
             # Filtering out any desktops without a DNS name
             $HVDesktopmachines = $HVDesktopmachines.Where( {$_.base.dnsname -ne $null} )
             # Remove machines in the exceptionlist
+            Write-CULog -Msg "Desktop machines count is $($HVDesktopmachines.Count) before applying exception list of $($exceptionlist.Count)"
             [array]$HVDesktopmachines = @( $HVDesktopmachines.Where( { $exceptionlist -notcontains $_.base.dnsname } ) )
+            Write-CULog -Msg "Desktop machines count is $($HVDesktopmachines.Count) after  applying exception list of $($exceptionlist.Count)"
                 foreach ($HVDesktopmachine in $HVDesktopmachines){
                     $dnsname=$HVDesktopmachine.base.dnsname
                     # Try to convert to lowercase
@@ -624,7 +629,9 @@ foreach ($hvconnectionserver in $hvconnectionservers){
     [array]$HVFarms = Get-HVfarms -HVConnectionServer $objHVConnectionServer
     
     if ($NULL -ne $hvfarms){
+        Write-CULog -Msg "Farms count is $($HVFarms.Count) before applying exception list of $($exceptionlist.Count)"
         [array]$HVFarms = $HVFarms | Where-Object {$exceptionlist -notcontains $_.Data.Name}
+        Write-CULog -Msg "Farms count is $($HVFarms.Count) after  applying exception list of $($exceptionlist.Count)"
         if($targetfolderpath -eq ""){
             [string]$Farmspath=$RDSDivider
         }
@@ -632,7 +639,7 @@ foreach ($hvconnectionserver in $hvconnectionservers){
             [string]$Farmspath=$targetfolderpath+"\"+$RDSDivider
         }
         if($ControlUpEnvironmentObject.name -notcontains $RDSDivider){
-            $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$RDSDivider" ,"$Farmspath","Folder","","$($podname)-Pod",""))
+            $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new("$RDSDivider" ,"$Farmspath","Folder","","$($podname)-Pod","")))
         }
         
 
@@ -640,7 +647,7 @@ foreach ($hvconnectionserver in $hvconnectionservers){
             # Create the variable for the batch of machines that will be used to add and remove machines
             $farmname=($hvfarm).Data.Name
             [string]$farmnamepath=$Farmspath+"\"+$farmname
-            $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$farmname" ,"$farmnamepath","Folder","","$($farmname)-Pool",""))
+            $ControlUpEnvironmentObject.Add(([ControlUpObject]::new("$farmname" ,"$farmnamepath","Folder","","$($farmname)-Pool","")))
             $farmname=($hvfarm).Data.Name
             Write-CULog -Msg "Processing RDS Farm $farmname"
             # Retreive all the desktops in the desktop pool.
@@ -650,7 +657,9 @@ foreach ($hvconnectionserver in $hvconnectionservers){
             if($HVfarmmachines -ne ""){
                 $HVfarmmachines = $HVfarmmachines | where-object {$_.AgentData.dnsname -ne $null}
                 # Remove machines in the exceptionlist
+                Write-CULog -Msg "Farm machine count is $($HVfarmmachines.Count) before applying exception list of $($exceptionlist.Count)"
                 [array]$HVfarmmachines = $HVfarmmachines | Where-Object {$exceptionlist -notcontains $_.AgentData.dnsname}
+                Write-CULog -Msg "Farm machine count is $($HVfarmmachines.Count) after  applying exception list of $($exceptionlist.Count)"
                 # Create List with desktops that need to be removed
                 foreach ($HVfarmmachine in $HVfarmmachines){
                     $dnsname=$HVfarmmachine.AgentData.dnsname
@@ -672,7 +681,7 @@ foreach ($hvconnectionserver in $hvconnectionservers){
                     catch {
                         Write-CULog -Msg "Error retreiving the domainname from the DNS name" -ShowConsole -Type E
                     }
-                    $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$toaddname" ,"$farmnamepath","Computer","$domainname","$($farmname)-Farm","$dnsname"))
+                    $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new("$toaddname" ,"$farmnamepath","Computer","$domainname","$($farmname)-Farm","$dnsname")) )
                 }
             }
         }

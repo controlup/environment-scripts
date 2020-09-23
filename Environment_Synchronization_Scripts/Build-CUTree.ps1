@@ -270,31 +270,46 @@ function Build-CUTree {
 	            [Parameter(Mandatory = $True)][Object]$BatchObject,
 	            [Parameter(Mandatory = $True)][string]$Message
             )
-            $batchCount = 1
+            [int]$batchCount = 0
             foreach ($batch in $BatchObject) {
+                $batchCount++
                 Write-CULog -Msg "$Message. Batch $batchCount/$($BatchObject.count)" -ShowConsole -Color DarkYellow -SubMsg
                 if (-not($preview)) {
-                    $PublishTime = Measure-Command { Publish-CUUpdates $batch }
-                    Write-CULog -Msg "Execution Time: $($PublishTime.TotalSeconds)" -ShowConsole -Color Green -SubMsg
+                    [datetime]$timeBefore = [datetime]::Now
+                    $result = Publish-CUUpdates -Batch $batch 
+                    [datetime]$timeAfter = [datetime]::Now
+                    [array]$results = @( Show-CUBatchResult -Batch $batch )
+                    [int]$failures = $results.Where( { $_.IsSuccess -eq $false -and $_.ErrorDescription -notmatch 'Folder with the same name already exists' } ).Count
+                    if( $failures -gt 0 )
+                    {
+                        Write-Warning -Message "Got $failures / $($results.Count) failures in batch"
+                    }
+                    Write-CULog -Msg "Execution Time: $(($timeAfter - $timeBefore).TotalSeconds) seconds" -ShowConsole -Color Green -SubMsg
+                    Write-CULog -Msg "Result: $result" -ShowConsole -Color Green -SubMsg
+                    Write-CULog -Msg "Failures: $failures / $($results.Count)" -ShowConsole -Color Green -SubMsg
                 } else {
                     Write-CULog -Msg "Execution Time: PREVIEW MODE" -ShowConsole -Color Green -SubMsg
                 }
-                $batchCount = $batchCount+1
             }
         }
         
+        <#
+        ## Paths must be absolute
         function Test-CUFolderPath {
             Param(
                 [parameter(Mandatory = $true,
                 HelpMessage = "Specifies a path to be tested. The value of the Path parameter is case insensitive and used exactly as it is typed. No characters are interpreted as wildcard characters.")]
                 [string]$Path
             )
-            if ($path.EndsWith("\")) { $Path = $Path.TrimEnd("\") }  # remove last character if it ends in a backslash
-            foreach ($folder in $CUFolders) {
-                if (($folder.Path) -eq "$Path") {return $true}
-            }
+            ## GRL Previous method relied on checking a cache of folders which did not have newly crated folders in. Apparently there's a risk though that Get-CUFolders can miss recently created folders.
+            [string]$trimmed = $path.Trim( '\' )
+            Get-CUFolders | Where-Object { ( $_.FolderType -eq 'Folder' -or $_.FolderType -eq 'RootFolder' ) -and $_.Path -eq $trimmed } | . { Process {
+                return $true
+            }}
+
             return $false
         }
+        #>
 
         #attempt to setup the log file
         if ($PSBoundParameters.ContainsKey("LogFile")) {
@@ -375,7 +390,6 @@ function Build-CUTree {
         }
         #endregion
 
-
         #region validate SiteId parameter
         [hashtable] $SiteIdParam = @{}
         if ($PSBoundParameters.ContainsKey("SiteId")) {
@@ -385,7 +399,6 @@ function Build-CUTree {
             Write-CULog -Msg "SiteId GUID: $SiteIdGUID" -ShowConsole -SubMsg
             $SiteIdParam.Add( 'SiteId' , $SiteIdGUID )
         }
-
 
         #region Retrieve ControlUp folder structure
         if (-not($DebugCUMachineEnvironment)) {
@@ -428,7 +441,7 @@ function Build-CUTree {
             Write-Debug "Number of folder objects in DebugCUMachineEnvironment: $($DebugCUMachineEnvironment.count)"
             if ($($DebugCUMachineEnvironment.count) -eq 2) {
                 foreach ($envObjects in $DebugCUMachineEnvironment) {
-                    if  ($($envObjects  | gm).TypeName[0] -eq "Create-CrazyCUEnvironment.CUFolderObject") {
+                    if  ($($envObjects  | Get-Member).TypeName[0] -eq "Create-CrazyCUEnvironment.CUFolderObject") {
                         $CUFolders = $envObjects
                     }
                 }
@@ -437,58 +450,32 @@ function Build-CUTree {
             }
         }
 
-
-
-
         #endregion
         $OrganizationName = ($CUFolders)[0].path
         Write-CULog -Msg "Organization Name: $OrganizationName" -ShowConsole
 
-        #testing for folder structure:
-        Write-CULog -Msg "Preparing root path: $("$OrganizationName\$CURootFolder")" -ShowConsole
-        $builtPath = $false
-        if (-not(Test-CUFolderPath -Path $("$OrganizationName\$CURootFolder"))) {
-            [string]$folderTree = ""
-            foreach ($folder in "$OrganizationName\$CURootFolder".split("\")) {
-                Write-CULog -Msg "Checking for folder : $folder" -Verbose
-                if ($folder -eq $OrganizationName) {
-                    $folderTree += "$folder"
-                } else {
-                    $folderTree += "\$folder"
-                }
-                if (Test-CUFolderPath -Path $folderTree) {
-                    Write-CULog -Msg "Path Found          : $folderTree" -Verbose
-                } else {
-                    Write-CULog -Msg "Path NOT found      : $folderTree" -Verbose
-                    $LastBackslashPosition = $folderTree.LastIndexOf("\")
-	                if ($LastBackslashPosition -gt 0) {
-                        Write-CULog "Adding Folder $folder" -ShowConsole -Color Green
-                        Write-CULog "Add-CUFolder -Name $folder -ParentPath $($folderTree.Substring(0,$LastBackslashPosition))" -ShowConsole -SubMsg
-                        $builtPath = $true
-                        Add-CUFolder -Name $folder -ParentPath $folderTree.Substring(0,$LastBackslashPosition)
-                        
-                    }
-                }
-            }
+        [array]$rootFolders = @( Get-CUFolders | Where-Object FolderType -eq 'RootFolder' )
+
+        Write-Verbose -Message "Got $($rootFolders.Count) root folders/organisations: $( ($rootFolders | Select-Object -ExpandProperty Path) -join ' , ' )"
+
+        [string]$pathSoFar = $null
+        [bool]$builtPath = $false
+        ## strip off leading \ as CU cmdlets don't like it
+        [string[]]$CURootFolderElements = @( ($CURootFolder.Trim( '\' ).Split( '\' ) ))
+        Write-Verbose -Message "Got $($CURootFolderElements.Count) elements in path `"$CURootFolder`""
+
+        ## see if first folder element is the organisation name and if not then we will prepend it as must have that
+        if( $OrganizationName -ne $CURootFolderElements[0] ) {
+            Write-CULog -Msg "Organization Name `"$OrganizationName`" not found in path `"$CURootFolder`" so adding" -Verbose
+            $CURootFolder = Join-Path -Path $OrganizationName -ChildPath $CURootFolder
         }
 
-        #if we built the path we need to update our variable:
-        if ($builtPath) {
-            $attempts = 0
-            Write-CULog -Msg "Updating CUFolders variable" -Verbose
-            do {
-                Write-CULog -Msg "Checking for $("$OrganizationName\$CURootFolder")" -Verbose
-                sleep 10 ## Need to sleep some amount of time to allow the update on the common config or else the folder changes aren't picked up.
-                $CUFolders = Get-CUFolders
-                $attempts = $attempts+1
-            } While ((-not(Test-CUFolderPath -Path $("$OrganizationName\$CURootFolder"))) -or $attempts -ge 10)
-        }
+        ## Code making folders checks if each element in folder exists and if not makes it so no pointmaking path here
 
         #region Prepare items for synchronization
         #replace FolderPath in ExternalTree object with the local ControlUp Path:
         foreach ($obj in $externalTree) {
-            $objectFolderPath = $obj.FolderPath
-            $obj.FolderPath = "$("$OrganizationName\$CURootFolder")\$objectFolderPath"
+            $obj.FolderPath = (Join-Path -Path $CURootFolder -ChildPath $obj.FolderPath).Trim( '\' ) ## CU doesn't like leading \
         }
 
         #We also create a hashtable to improve lookup performance for computers in large organizations.
@@ -524,21 +511,29 @@ function Build-CUTree {
 
         #we'll output the statistics at the end -- also helps with debugging
         $FoldersToAdd       = New-Object System.Collections.Generic.List[PSObject]
-        
+        [hashtable]$newFoldersAdded = @{} ## keep track of what we've issued btch commands to create so we don't duplicate
+
         foreach ($ExtFolderPath in $ExtFolderPaths.FolderPath) {
-            if ("$ExtFolderPath" -notin $($CUFolders.Path)) {  ##check if folder doesn't already exist
-	            $LastBackslashPosition = $ExtFolderPath.LastIndexOf("\")
-	            if ($LastBackslashPosition -gt 0) {
-                    if ($FoldersToAddCount -ge $maxFolderBatchSize) {  ## we will execute folder batch operations $maxFolderBatchSize at a time
-                        Write-Verbose "Generating a new add folder batch"
-                        $FolderAddBatches.Add($FoldersToAddBatch)
-                        $FoldersToAddCount = 0
-                        $FoldersToAddBatch = New-CUBatchUpdate
+            if ( $ExtFolderPath -notin $CUFolders.Path ) {  ##check if folder doesn't already exist
+                [string]$pathSoFar = $null
+                ## Check each part of the path exists, or will be created, and if not add a task to create it
+                ForEach( $pathElement in ($ExtFolderPath.Trim( '\' )).Split( '\' ) ) {
+                    [string]$absolutePath = $(if( $pathSoFar ) { Join-Path -Path $pathSoFar -ChildPath $pathElement } else { $pathElement })
+                    if( $null -eq $newFoldersAdded[ $absolutePath ] -and $absolutePath -notin $CUFolders.Path  ) ## not already added it to folder creations or already exists
+                    {
+                        if ($FoldersToAddCount -ge $maxFolderBatchSize) {  ## we will execute folder batch operations $maxFolderBatchSize at a time
+                            Write-Verbose "Generating a new add folder batch"
+                            $FolderAddBatches.Add($FoldersToAddBatch)
+                            $FoldersToAddCount = 0
+                            $FoldersToAddBatch = New-CUBatchUpdate
+                        }
+                        Add-CUFolder -Name $pathElement -ParentPath $pathSoFar -Batch $FoldersToAddBatch
+                        $FoldersToAdd.Add("Add-CUFolder -Name `"$pathElement`" -ParentPath `"$pathSoFar`"")
+                        $FoldersToAddCount++
+                        $newFoldersAdded.Add( $absolutePath , $ExtFolderPath )
                     }
-                    Add-CUFolder -Name $ExtFolderPath.Substring($LastBackslashPosition+1) -ParentPath $ExtFolderPath.Substring(0,$LastBackslashPosition) -Batch $FoldersToAddBatch
-                    $FoldersToAdd.Add("Add-CUFolder -Name $($ExtFolderPath.Substring($LastBackslashPosition+1)) -ParentPath `"$($ExtFolderPath.Substring(0,$LastBackslashPosition))`"")
-                    $FoldersToAddCount = $FoldersToAddCount+1
-	            }   
+                    $pathSoFar = $absolutePath
+                }
             }
         }
         if ($FoldersToAddCount -le $maxFolderBatchSize -and $FoldersToAddCount -ne 0) { $FolderAddBatches.Add($FoldersToAddBatch) }
@@ -661,7 +656,6 @@ function Build-CUTree {
 
         #endregion
 
-
         Write-CULog -Msg "Folders to Add     : $($FoldersToAdd.Count)" -ShowConsole -Color White 
         Write-CULog -Msg "Folders to Add Batches     : $($FolderAddBatches.Count)" -ShowConsole -Color Gray -SubMsg
         if ($($FoldersToAdd.Count) -ge 25) {
@@ -673,7 +667,6 @@ function Build-CUTree {
                 Write-CULog -Msg "$obj" -ShowConsole -Color Green -SubMsg
             }
         }
-
 
         Write-CULog -Msg "Folders to Remove  : $($FoldersToRemove.Count)" -ShowConsole -Color White
         Write-CULog -Msg "Folders to Remove Batches  : $($FoldersToRemoveBatches.Count)" -ShowConsole -Color Gray -SubMsg
@@ -723,7 +716,6 @@ function Build-CUTree {
             }
         }
             
-
         $endTime = Get-Date
 
         Write-CULog -Msg "Build-CUTree took: $($(New-TimeSpan -Start $startTime -End $endTime).Seconds) Seconds." -ShowConsole -Color White
