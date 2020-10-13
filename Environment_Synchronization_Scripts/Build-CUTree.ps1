@@ -105,7 +105,11 @@
             Executes a sync of the $WVDEnvironment object to the ControlUp folder "VDI_and_SBC\WVD" with object removal enabled.
 
     .CONTEXT
+
     .MODIFICATION_HISTORY
+
+     @guyrlech 2020-10-13   Build-CUTree returns error count
+
     .LINK
         https://www.controlup.com
 
@@ -179,10 +183,11 @@ function Build-CUTree {
 
     Begin {
 
-    #This variable sets the maximum computer batch size to apply the changes in ControlUp. It is not recommended making it bigger than 1000
-    $maxBatchSize = 1000
-    #This variable sets the maximum batch size to apply the changes in ControlUp. It is not recommended making it bigger than 100
-    $maxFolderBatchSize = 100
+        #This variable sets the maximum computer batch size to apply the changes in ControlUp. It is not recommended making it bigger than 1000
+        $maxBatchSize = 1000
+        #This variable sets the maximum batch size to apply the changes in ControlUp. It is not recommended making it bigger than 100
+        $maxFolderBatchSize = 100
+        [int]$errorCount = 0
 
         function Write-CULog {
             <#
@@ -270,6 +275,7 @@ function Build-CUTree {
 	            [Parameter(Mandatory = $True)][Object]$BatchObject,
 	            [Parameter(Mandatory = $True)][string]$Message
             )
+            [int]$returnCode = 0
             [int]$batchCount = 0
             foreach ($batch in $BatchObject) {
                 $batchCount++
@@ -279,18 +285,15 @@ function Build-CUTree {
                     $result = Publish-CUUpdates -Batch $batch 
                     [datetime]$timeAfter = [datetime]::Now
                     [array]$results = @( Show-CUBatchResult -Batch $batch )
-                    [array]$failures = $results.Where( { $_.IsSuccess -eq $false -and $_.ErrorDescription -notmatch 'Folder with the same name already exists' } )
+                    [array]$failures = @( $results.Where( { $_.IsSuccess -eq $false -and $_.ErrorDescription -notmatch 'Folder with the same name already exists' } ) )
 
                     Write-CULog -Msg "Execution Time: $(($timeAfter - $timeBefore).TotalSeconds) seconds" -ShowConsole -Color Green -SubMsg
                     Write-CULog -Msg "Result: $result" -ShowConsole -Color Green -SubMsg
                     Write-CULog -Msg "Failures: $($failures.Count) / $($results.Count)" -ShowConsole -Color Green -SubMsg
 
-                    if( $failures -and $failures.Count -gt 0 )
-                    {
-                        ForEach( $failure in $failures )
-                        {
-                            Write-CULog -Msg "Action $($failure.ActionName) on `"$($failure.Subject)`" gave error $($failure.ErrorDescription) ($($failure.ErrorCode))" -ShowConsole -Type E
-                        }
+                    if( $failures -and $failures.Count -gt 0 ) {
+                        $returnCode += $failures.Count
+                        Write-CULog -Msg "Action $($failure.ActionName) on `"$($failure.Subject)`" gave error $($failure.ErrorDescription) ($($failure.ErrorCode))" -ShowConsole -Type E
                     }
                 } else {
                     Write-CULog -Msg "Execution Time: PREVIEW MODE" -ShowConsole -Color Green -SubMsg
@@ -392,6 +395,7 @@ function Build-CUTree {
         }
         catch {
             Write-CULog -Msg 'The required ControlUp PowerShell module was not found or could not be loaded. Please make sure this is a ControlUp Monitor machine.' -ShowConsole -Type E
+            $errorCount++
         }
         #endregion
 
@@ -725,10 +729,14 @@ function Build-CUTree {
 
         Write-CULog -Msg "Build-CUTree took: $($(New-TimeSpan -Start $startTime -End $endTime).Seconds) Seconds." -ShowConsole -Color White
         Write-CULog -Msg "Committing Changes:" -ShowConsole -Color DarkYellow
-        if ($ComputersRemoveBatches.Count -gt 0) { Execute-PublishCUUpdates -BatchObject $ComputersRemoveBatches -Message "Executing Computer Object Removal" }
-        if ($FoldersToRemoveBatches.Count -gt 0) { Execute-PublishCUUpdates -BatchObject $FoldersToRemoveBatches -Message "Executing Folder Object Removal"   }
-        if ($FolderAddBatches.Count -gt 0)       { Execute-PublishCUUpdates -BatchObject $FolderAddBatches -Message "Executing Folder Object Adds"            }
-        if ($ComputersAddBatches.Count -gt 0)    { Execute-PublishCUUpdates -BatchObject $ComputersAddBatches -Message "Executing Computer Object Adds"       }
-        if ($ComputersMoveBatches.Count -gt 0)   { Execute-PublishCUUpdates -BatchObject $ComputersMoveBatches -Message "Executing Computer Object Moves"     }
-    }   
+        if ($ComputersRemoveBatches.Count -gt 0) { $errorCount += Execute-PublishCUUpdates -BatchObject $ComputersRemoveBatches -Message "Executing Computer Object Removal" }
+        if ($FoldersToRemoveBatches.Count -gt 0) { $errorCount += Execute-PublishCUUpdates -BatchObject $FoldersToRemoveBatches -Message "Executing Folder Object Removal"   }
+        if ($FolderAddBatches.Count -gt 0)       { $errorCount += Execute-PublishCUUpdates -BatchObject $FolderAddBatches -Message "Executing Folder Object Adds"            }
+        if ($ComputersAddBatches.Count -gt 0)    { $errorCount += Execute-PublishCUUpdates -BatchObject $ComputersAddBatches -Message "Executing Computer Object Adds"       }
+        if ($ComputersMoveBatches.Count -gt 0)   { $errorCount += Execute-PublishCUUpdates -BatchObject $ComputersMoveBatches -Message "Executing Computer Object Moves"     }
+
+        Write-CULog -Msg "Returning $errorCount to caller"
+
+        return $errorCount
+    }
 }
