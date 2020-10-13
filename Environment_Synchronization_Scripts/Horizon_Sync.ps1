@@ -58,7 +58,8 @@
 
 .MODIFICATION_HISTORY
     Wouter Kursten,         2020-08-11 - Original Code
-    Guy Leech               2020-09-23 - Added more logging for fatal errors to aid troubleshooting when run as ascheduled task
+    Guy Leech,              2020-09-23 - Added more logging for fatal errors to aid troubleshooting when run as ascheduled task
+    Guy Leech,              2020-10-13 - Accommodate Build-CUTree returning error count
 .LINK
 
 .COMPONENT
@@ -724,4 +725,4 @@ if ($Site){
     $BuildCUTreeParams.Add("SiteId",$Site)
 }
 
-Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams
+[int]$errorCount = Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams

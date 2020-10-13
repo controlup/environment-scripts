@@ -40,6 +40,9 @@
     Add brokers to the ControlUp Tree. This optional parameter can be specified if you prefer this script to add broker machines as they
     are detected. If this parameter is omitted then Broker machines will not be moved or added to your ControlUp tree.
 
+.PARAMETER enabledOnly
+    Only include Delivery Groups which are enabled
+
 .PARAMETER MatchEUCEnvTree
     Configures the script to match the same structure used by ControlUp for the EUC Environment Tree. If this parameter is omitted the
     Delivery Group is added to the FolderPath. 
@@ -69,7 +72,8 @@
 .MODIFICATION_HISTORY
     Trentent Tye,         2020-08-06 - Original Code
     Guy Leech,            2020-09-16 - Fix missing siteid hashtable, changed from dot sourcing common module from cwd to same path as this sript
-
+    Guy Leech,            2020-10-09 - Added parameter -enabledOnly to only include Delivery Groups which are enabled
+    Guy Leech,            2020-10-13 - Accommodate Build-CUTree returning error count
 .LINK
 
 .COMPONENT
@@ -166,7 +170,13 @@ Param
         HelpMessage='Adds the Citrix Brokers to the ControlUp tree'
     )]
     [ValidateNotNullOrEmpty()]
-    [switch] $addBrokersToControlUp
+    [switch] $addBrokersToControlUp ,
+
+    [Parameter(
+        Mandatory=$false, 
+        HelpMessage='Only adds Delivery Groups which are enabled'
+    )]
+    [switch] $enabledOnly
 ) 
 
 ## GRL this way allows script to be run with debug/verbose without changing script
@@ -216,20 +226,32 @@ if( ! ( Test-Path -Path $buildCuTreeScriptPath -PathType Leaf -ErrorAction Silen
 
 . $buildCuTreeScriptPath
 
-# Add Citrix snap-ins
-## GRL SHould review this as more recent releases have modules
-Add-PSSnapin -Name Citrix*
+# Add required Citrix cmdlets
+
+## new CVAD have modules so use these in preference to snapins which are there for backward compatibility
+if( ! (  Import-Module -Name Citrix.DelegatedAdmin.Commands -ErrorAction SilentlyContinue -PassThru -Verbose:$false) `
+    -and ! ( Add-PSSnapin -Name Citrix.Broker.Admin.* -ErrorAction SilentlyContinue -PassThru -Verbose:$false) )
+{
+    Throw 'Failed to load Citrix PowerShell cmdlets - is this a Delivery Controller or have Studio or the PowerShell SDK installed ?'
+}
 
 Write-Host "Brokers: $Brokers"
 $DeliveryGroups = New-Object System.Collections.Generic.List[PSObject]
 $BrokerMachines = New-Object System.Collections.Generic.List[PSObject]
 $CTXSites       = New-Object System.Collections.Generic.List[PSObject]
+
+[hashtable]$brokerParameters = @{ 'AdminAddress' = $adminAddr }
+if( $enabledOnly )
+{
+    $brokerParameters.Add( 'Enabled' , $true )
+}
+
 foreach ($adminAddr in $brokers) {
     $CTXSite = Get-BrokerSite -AdminAddress $adminAddr
     $CTXSites.Add($CTXSite)
     Write-Verbose -Message "Querying $adminAddr for Delivery Groups"
     #Get list of Delivery Groups
-    foreach ($DeliveryGroup in $(Get-BrokerDesktopGroup -AdminAddress $adminAddr)) {
+    foreach ($DeliveryGroup in $(Get-BrokerDesktopGroup @brokerParameters)) {
         if ($DeliveryGroups.Count -eq 0) {
             $DeliveryGroupObject = [PSCustomObject]@{
                     MachineName         = ""
@@ -399,4 +421,4 @@ if ($Site){
     $BuildCUTreeParams.Add("SiteId",$Site)
 }
 
-Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams
+[int]$errorCount = Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams
