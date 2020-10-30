@@ -74,6 +74,8 @@
     Guy Leech,            2020-09-16 - Fix missing siteid hashtable, changed from dot sourcing common module from cwd to same path as this sript
     Guy Leech,            2020-10-09 - Added parameter -enabledOnly to only include Delivery Groups which are enabled
     Guy Leech,            2020-10-13 - Accommodate Build-CUTree returning error count
+    Guy Leech,            2020-10-30 - Fixed bug where -Adminaddress not passed to Get-BrokerDesktopGroup
+
 .LINK
 
 .COMPONENT
@@ -240,13 +242,14 @@ $DeliveryGroups = New-Object System.Collections.Generic.List[PSObject]
 $BrokerMachines = New-Object System.Collections.Generic.List[PSObject]
 $CTXSites       = New-Object System.Collections.Generic.List[PSObject]
 
-[hashtable]$brokerParameters = @{ 'AdminAddress' = $adminAddr }
+[hashtable]$brokerParameters = @{ }
 if( $enabledOnly )
 {
     $brokerParameters.Add( 'Enabled' , $true )
 }
 
 foreach ($adminAddr in $brokers) {
+    $brokerParameters.AdminAddress = $adminAddr
     $CTXSite = Get-BrokerSite -AdminAddress $adminAddr
     $CTXSites.Add($CTXSite)
     Write-Verbose -Message "Querying $adminAddr for Delivery Groups"
@@ -343,7 +346,10 @@ Write-Verbose -Message "Total Number of Delivery Groups after filtering for excl
 Write-Host "Adding Delivery Groups to ControlUp Environmental Object"
 $ControlUpEnvironmentObject = New-Object System.Collections.Generic.List[PSObject]
 foreach ($DeliveryGroup in $DeliveryGroups) {
-    $ControlUpEnvironmentObject.Add([ControlUpObject]::new($($DeliveryGroup.Name) ,"$($DeliveryGroup.Name)","Folder","","$($DeliveryGroup.site)-DeliveryGroup",""))
+    if( $newObject = [ControlUpObject]::new($($DeliveryGroup.Name) ,"$($DeliveryGroup.Name)","Folder","","$($DeliveryGroup.site)-DeliveryGroup",""))
+    {
+        $ControlUpEnvironmentObject.Add( $newObject )
+    }
 }
 
 #Add machines from the delivery group to the environmental object
@@ -361,7 +367,10 @@ foreach ($DeliveryGroup in $DeliveryGroups) {
             }
             $Domain = $Machine.MachineName.split("\")[0]
             $Name =$Machine.MachineName.split("\")[1]
-            $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new($($Name) ,"$($DeliveryGroup.Name)","Computer","$Domain","$($DeliveryGroup.site)-Machine","$DNSName")) )
+            if( $newObject = [ControlUpObject]::new( $Name , $DeliveryGroup.Name , "Computer" , $Domain , "$($DeliveryGroup.site)-Machine" , $DNSName ) )
+            {
+                $ControlUpEnvironmentObject.Add( $newObject )
+            }
         }
     }
 }
@@ -369,7 +378,10 @@ foreach ($DeliveryGroup in $DeliveryGroups) {
 #Add Brokers to ControlUpEnvironmentalObject
 if ($addBrokersToControlUp) {
     if (-not($MatchEUCEnvTree)) {  # MatchEUCEnvTree will add environment specific brokers folders
-        $ControlUpEnvironmentObject.Add([ControlUpObject]::new("Brokers" ,"Brokers","Folder","","Brokers",""))
+        if( $newObject = [ControlUpObject]::new( "Brokers" ,"Brokers","Folder","","Brokers","" ))
+        {
+            $ControlUpEnvironmentObject.Add( $newObject )
+        }
     }
     foreach ($Machine in $BrokerMachines) {
         if ([string]::IsNullOrEmpty($machine.DNSName)) {
@@ -379,7 +391,10 @@ if ($addBrokersToControlUp) {
         }
         $Domain = $Machine.MachineName.split("\")[0]
         $Name =$Machine.MachineName.split("\")[1]
-        $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new($($Name) ,"Brokers","Computer","$Domain","$($Machine.site)-BrokerMachine","$DNSName")))
+        if( $newObject = [ControlUpObject]::new( $Name , "Brokers" , "Computer" , $Domain , "$($Machine.site)-BrokerMachine" , $DNSName ))
+        {
+            $ControlUpEnvironmentObject.Add( $newObject )
+        }
     }
 }
 ## TYE
@@ -394,7 +409,10 @@ if ($MatchEUCEnvTree) {
     }
     if ($addBrokersToControlUp) {
         foreach ($CtxSite in $($CTXSites | Sort-Object -Unique)) {
-            $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new("Brokers" ,"$($CTXSite.Name)\Brokers","Folder","","Brokers","")))
+            if( $newObject = [ControlUpObject]::new("Brokers" ,"$($CTXSite.Name)\Brokers","Folder","","Brokers",""))
+            {
+                $ControlUpEnvironmentObject.Add( $newObject )
+            }
         }
     }
 }

@@ -108,7 +108,9 @@
 
     .MODIFICATION_HISTORY
 
-     @guyrlech 2020-10-13   Build-CUTree returns error count
+     @guyrleech 2020-10-13   Build-CUTree returns error count
+     @guyrleech 2020-10-26   Bug fixed when deleting - path repeated organization name so never matched items to delete
+     @guyrleech 2020-10-30   Bug fixed where computers were not being deleted, fixed bug in dll version detection
 
     .LINK
         https://www.controlup.com
@@ -285,7 +287,7 @@ function Build-CUTree {
                     $result = Publish-CUUpdates -Batch $batch 
                     [datetime]$timeAfter = [datetime]::Now
                     [array]$results = @( Show-CUBatchResult -Batch $batch )
-                    [array]$failures = @( $results.Where( { $_.IsSuccess -eq $false -and $_.ErrorDescription -notmatch 'Folder with the same name already exists' } ) )
+                    [array]$failures = @( $results.Where( { $_.IsSuccess -eq $false } )) ## -and $_.ErrorDescription -notmatch 'Folder with the same name already exists' } ) )
 
                     Write-CULog -Msg "Execution Time: $(($timeAfter - $timeBefore).TotalSeconds) seconds" -ShowConsole -Color Green -SubMsg
                     Write-CULog -Msg "Result: $result" -ShowConsole -Color Green -SubMsg
@@ -293,7 +295,9 @@ function Build-CUTree {
 
                     if( $failures -and $failures.Count -gt 0 ) {
                         $returnCode += $failures.Count
-                        Write-CULog -Msg "Action $($failure.ActionName) on `"$($failure.Subject)`" gave error $($failure.ErrorDescription) ($($failure.ErrorCode))" -ShowConsole -Type E
+                        ForEach( $failure in $failures ) {
+                            Write-CULog -Msg "Action $($failure.ActionName) on `"$($failure.Subject)`" gave error $($failure.ErrorDescription) ($($failure.ErrorCode))" -ShowConsole -Type E
+                        }
                     }
                 } else {
                     Write-CULog -Msg "Execution Time: PREVIEW MODE" -ShowConsole -Color Green -SubMsg
@@ -346,54 +350,52 @@ function Build-CUTree {
     }
 
     Process {
-        <#
-        ## For debugging uncomment
-        $ErrorActionPreference = 'Stop'
-        $VerbosePreference = 'SilentlyContinue'
-        $DebugPreference = 'SilentlyContinue'
-        Set-StrictMode -Version Latest
-        #>
-
         $startTime = Get-Date
 
         #region Load ControlUp PS Module
         try {
             ## Check CU monitor is installed and at least minimum required version
             [string]$cuMonitor = 'ControlUp Monitor'
+            [string]$cuDll = 'ControlUp.PowerShell.User.dll'
             [version]$minimumCUmonitorVersion = '8.1.5.600'
             if( ! ( $installKey = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -Name DisplayName -ErrorAction SilentlyContinue| Where-Object DisplayName -eq $cuMonitor ) )
             {
-                Write-Error -Message "$cuMonitor does not appear to be installed"
+                Write-Warning -Message "$cuMonitor does not appear to be installed"
+            }
+ 
+	        # Importing the latest ControlUp PowerShell Module - need to find path for dll which will be where cumonitor is running from. Don't use Get-Process as may not be elevated so would fail to get path to exe and win32_service fails as scheduled task with access denied
+            if( ! ( $cuMonitorServicePath = ( Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\cuMonitor' -Name ImagePath -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ImagePath ).Trim( '"' ) ) )
+            {
+                Write-Error -Message "$cuMonitor service path not found in registry"
                 break
             }
-	        # Importing the latest ControlUp PowerShell Module
-	        if( ! ( $pathtomodule = (Get-ChildItem "$($env:ProgramFiles)\Smart-X\ControlUpMonitor\*\ControlUp.PowerShell.User.dll" -Recurse -Force | Sort-Object -Property VersionInfo.FileVersion -Descending) | Select-Object -First 1 ) )
+            elseif( ! ( $cuMonitorProperties = Get-ItemProperty -Path $cuMonitorServicePath -ErrorAction SilentlyContinue) )
             {
-                Write-Error -Message "Unable to find ControlUp.PowerShell.User.dll"
+                Write-Error -Message "Unable to find CUmonitor service at $cuMonitorServicePath"
                 break
             }
-            ## dll version is 1.0.0.0 so we check cuMonitor.exe
-            if( $cuMonitorExeProperties = Get-ChildItem -Path (Join-Path -Path $pathtomodule.DirectoryName -ChildPath 'cuMonitor.exe') -Force -ErrorAction SilentlyContinue )
+            elseif( $cuMonitorProperties.VersionInfo.FileVersion -lt $minimumCUmonitorVersion )
             {
-                if( $cuMonitorExeProperties.VersionInfo.FileVersion -lt $minimumCUmonitorVersion )
-                {
-                    Write-Warning -Message "Found version $($cuMonitorExeProperties.VersionInfo.FileVersion) of cuMonitor.exe but need at least $($minimumCUmonitorVersion.ToString())"
-                }
+                Write-Error -Message "Found version $($cuMonitorProperties.VersionInfo.FileVersion) of cuMonitor.exe but need at least $($minimumCUmonitorVersion.ToString())"
+                break
             }
-            else
+            elseif( ! ( $pathtomodule = Join-Path -Path (Split-Path -Path $cuMonitorServicePath -Parent) -ChildPath $cuDll ) )
             {
-                Write-Warning -Message "Unable to find cuMonitor.exe in folder `"$($pathtomodule.DirectoryName)`""
+                Write-Error -Message "Unable to find $cuDll in `"$pathtomodule`""
+                break
             }
-	        if( ! ( Import-Module $pathtomodule -PassThru ) )
+	        elseif( ! ( Import-Module $pathtomodule -PassThru ) )
             {
                 break
             }
-            if( ! ( Get-Command -Name 'Get-CUFolders' -ErrorAction SilentlyContinue ) )
+            elseif( ! ( Get-Command -Name 'Get-CUFolders' -ErrorAction SilentlyContinue ) )
             {
                 Write-Error -Message "Loaded CU Monitor PowerShell module but unable to find cmdlet Get-CUFolders"
+                break
             }
         }
         catch {
+            Write-CULog -Msg $_ -ShowConsole -Type E
             Write-CULog -Msg 'The required ControlUp PowerShell module was not found or could not be loaded. Please make sure this is a ControlUp Monitor machine.' -ShowConsole -Type E
             $errorCount++
         }
@@ -615,17 +617,33 @@ function Build-CUTree {
         if ($Delete) {
             Write-CULog "Determining Objects to be Removed" -ShowConsole
 	        # Build batch for folders which are in ControlUp but not in the external source
-            if ($CUFolders.where{$_.Path -like "$("$OrganizationName\$CURootFolder")\*"}.count -eq 0) { ## Get CUFolders filtered to targetted sync path
-               $CUFolderSyncRoot = $CUFolders.where{$_.Path -like "$("$OrganizationName\$CURootFolder")"} ## if count is 0 then no subfolders exist
+<#
+            if ($CUFolders.where{ $_.Path -like "$("$CURootFolder")\*" }.count -eq 0) { ## Get CUFolders filtered to targetted sync path
+               $CUFolderSyncRoot = $CUFolders.where{$_.Path -like "$("$CURootFolder")"} ## if count is 0 then no subfolders exist
                Write-CULog "Root Target Path : Only Target Folder Exists" -ShowConsole -Verbose
             }
-            if ($CUFolders.where{$_.Path -like "$("$OrganizationName\$CURootFolder")\*"}.count -ge 1) { ## if count is ge 1 then grab all subfolders
-                $CUFolderSyncRoot = $CUFolders.where{$_.Path -like "$("$OrganizationName\$CURootFolder")\*"} 
+            if ($CUFolders.where{$_.Path -like "$("$CURootFolder")\*"}.count -ge 1) { ## if count is ge 1 then grab all subfolders
+                $CUFolderSyncRoot = $CUFolders.where{$_.Path -like "$("$CURootFolder")\*"} 
                 Write-CULog "Root Target Path : Subfolders detected" -ShowConsole -Verbose
+            }
+#>
+            [string]$folderRegex = "^$([regex]::Escape( $CURootFolder ))\\.+"
+            [array]$CUFolderSyncRoot = @( $CUFolders.Where{ $_.Path -match $folderRegex } )
+            if( $CUFolderSyncRoot -and $CUFolderSyncRoot.Count )
+            {
+                Write-CULog "Root Target Path : $($CUFolderSyncRoot.Count) subfolders detected" -ShowConsole -Verbose
+            }
+            else
+            {
+                Write-CULog "Root Target Path : Only Target Folder Exists" -ShowConsole -Verbose
             }
             Write-CULog "Determining Folder Objects to be Removed" -ShowConsole
 	        foreach ($CUFolder in $($CUFolderSyncRoot.Path)) {
-    	        if (($CUFolder -notin $ExtFolderPaths.FolderPath) -and ($CUFolder -ne $("$OrganizationName\$CURootFolder"))) { #prevents excluding the root folder
+                $folderRegex = "$([regex]::Escape( $CUFolder ))"
+                ## need to test if the whole path matches or it's a sub folder (so "Folder 1" won't match "Folder 12")
+                if( $ExtFolderPaths.Where( { $_.FolderPath -match "^$folderRegex$" -or $_.FolderPath -match "^$folderRegex\\" } ).Count -eq 0 -and $CUFolder -ne $CURootFolder ) {
+                ## can't use a simple -notin as path may be missing but there may be child paths of it - GRL
+    	        ##if (($CUFolder -notin $ExtFolderPaths.FolderPath) -and ($CUFolder -ne $("$CURootFolder"))) { #prevents excluding the root folder
                     if ($Delete) {
                         if ($FoldersToRemoveCount -ge $maxFolderBatchSize) {  ## we will execute computer batch operations $maxBatchSize at a time
                             Write-Verbose "Generating a new remove folder batch"
@@ -642,9 +660,10 @@ function Build-CUTree {
 
             Write-CULog "Determining Computer Objects to be Removed" -ShowConsole
 	        # Build batch for computers which are in ControlUp but not in the external source
-	        foreach ($CUComputer in $CUComputers.where{$_.path.startsWith(("$OrganizationName\$CURootFolder").ToLower())}) { #hey! StartsWith is case sensitive..  at least we return path in lowercase.
-                if ($($ExtFolderPaths.FolderPath) -contains $CUComputer.path) {
-    	            if (-not($ExtTreeHashTable.Contains("$($CUComputer.name)"))) {
+            [string]$curootFolderAllLower = $CURootFolder.ToLower()
+	        foreach ($CUComputer in $CUComputers.Where{$_.path.startsWith( $curootFolderAllLower ) }) { #hey! StartsWith is case sensitive..  at least we return path in lowercase.
+                ##if ($($ExtFolderPaths.FolderPath) -contains $CUComputer.path) {
+    	            if (-not $ExtTreeHashTable[ $CUComputer.name ] ) {
                         if ($Delete) {
                             if ($FoldersToRemoveCount -ge $maxFolderBatchSize) {  ## we will execute computer batch operations $maxBatchSize at a time
                                 Write-Verbose "Generating a new remove computer batch"
@@ -657,7 +676,7 @@ function Build-CUTree {
                             $ComputersRemoveCount = $ComputersRemoveCount+1
                         }
                     }
-    	        }
+    	        ##}
 	        }
         }
         if ($FoldersToRemoveCount -le $maxFolderBatchSize -and $FoldersToRemoveCount -ne 0) { $FoldersToRemoveBatches.Add($FoldersToRemoveBatch)   }
