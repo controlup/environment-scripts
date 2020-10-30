@@ -570,7 +570,8 @@ foreach ($hvconnectionserver in $hvconnectionservers){
 
         # Add folder with the podname to the batch
         [string]$targetfolderpath="$podname"
-        $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new("$podname" ,"$podname","Folder","","","")))
+        $object = [ControlUpObject]::new("$podname" ,"$podname","Folder","","","")
+        $ControlUpEnvironmentObject.Add( $object )
 
     }
     else{
