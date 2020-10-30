@@ -362,15 +362,16 @@ function Build-CUTree {
             {
                 Write-Warning -Message "$cuMonitor does not appear to be installed"
             }
-	        # Importing the latest ControlUp PowerShell Module - need to find path for dll which will be where cumonitor is running from. Don't use Get-Process as may not be elevated so would fail to get path to exe
-            if( ! ( $cuMonitorService = Get-CimInstance -ClassName win32_service -Filter 'Name = "cumonitor"' -ErrorAction SilentlyContinue ) )
+ 
+	        # Importing the latest ControlUp PowerShell Module - need to find path for dll which will be where cumonitor is running from. Don't use Get-Process as may not be elevated so would fail to get path to exe and win32_service fails as scheduled task with access denied
+            if( ! ( $cuMonitorServicePath = ( Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\cuMonitor' -Name ImagePath -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ImagePath ).Trim( '"' ) ) )
             {
-                Write-Error -Message "Unable to find CUmonitor service definition"
+                Write-Error -Message "$cuMonitor service path not found in registry"
                 break
             }
-            elseif( ! ( $cuMonitorProperties = Get-ItemProperty -Path ($cumonitorService.PathName.Trim( '"' )) -ErrorAction SilentlyContinue) )
+            elseif( ! ( $cuMonitorProperties = Get-ItemProperty -Path $cuMonitorServicePath -ErrorAction SilentlyContinue) )
             {
-                Write-Error -Message "Unable to find CUmonitor service at $($cuMonitorService.PathName)"
+                Write-Error -Message "Unable to find CUmonitor service at $cuMonitorServicePath"
                 break
             }
             elseif( $cuMonitorProperties.VersionInfo.FileVersion -lt $minimumCUmonitorVersion )
@@ -378,7 +379,7 @@ function Build-CUTree {
                 Write-Error -Message "Found version $($cuMonitorProperties.VersionInfo.FileVersion) of cuMonitor.exe but need at least $($minimumCUmonitorVersion.ToString())"
                 break
             }
-            elseif( ! ( $pathtomodule = Join-Path -Path (Split-Path -Path ($cumonitorService.PathName.Trim( '"' )) -Parent) -ChildPath $cuDll ) )
+            elseif( ! ( $pathtomodule = Join-Path -Path (Split-Path -Path $cuMonitorServicePath -Parent) -ChildPath $cuDll ) )
             {
                 Write-Error -Message "Unable to find $cuDll in `"$pathtomodule`""
                 break
@@ -394,6 +395,7 @@ function Build-CUTree {
             }
         }
         catch {
+            Write-CULog -Msg $_ -ShowConsole -Type E
             Write-CULog -Msg 'The required ControlUp PowerShell module was not found or could not be loaded. Please make sure this is a ControlUp Monitor machine.' -ShowConsole -Type E
             $errorCount++
         }
