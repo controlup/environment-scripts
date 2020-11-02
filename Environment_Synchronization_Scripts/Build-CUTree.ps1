@@ -111,6 +111,7 @@
      @guyrleech 2020-10-13   Build-CUTree returns error count
      @guyrleech 2020-10-26   Bug fixed when deleting - path repeated organization name so never matched items to delete
      @guyrleech 2020-10-30   Bug fixed where computers were not being deleted, fixed bug in dll version detection
+     @guyrleech 2020-11-02   Workaround for bug where batch folder creation fails where folder name already exists at top level
 
     .LINK
         https://www.controlup.com
@@ -177,8 +178,13 @@ function Build-CUTree {
     	    Mandatory=$false,
     	    HelpMessage='Debug CU Folder Environment Object'
 	    )]
-	    [switch] $DebugCUFolderEnvironment
+	    [switch] $DebugCUFolderEnvironment ,
 
+        [Parameter(
+    	    Mandatory=$false,
+    	    HelpMessage='Create folders in batches rather than individually'
+	    )]
+	    [switch] $batchCreateFolders
     )
     #endregion
 
@@ -532,13 +538,28 @@ function Build-CUTree {
                     [string]$absolutePath = $(if( $pathSoFar ) { Join-Path -Path $pathSoFar -ChildPath $pathElement } else { $pathElement })
                     if( $null -eq $newFoldersAdded[ $absolutePath ] -and $absolutePath -notin $CUFolders.Path  ) ## not already added it to folder creations or already exists
                     {
-                        if ($FoldersToAddCount -ge $maxFolderBatchSize) {  ## we will execute folder batch operations $maxFolderBatchSize at a time
-                            Write-Verbose "Generating a new add folder batch"
-                            $FolderAddBatches.Add($FoldersToAddBatch)
-                            $FoldersToAddCount = 0
-                            $FoldersToAddBatch = New-CUBatchUpdate
+                        ## there is a bug that causes an error if a folder name being created in a batch already exists at the top level so we workaround it
+                        if( $batchCreateFolders )
+                        {
+                            if ($FoldersToAddCount -ge $maxFolderBatchSize) {  ## we will execute folder batch operations $maxFolderBatchSize at a time
+                                Write-Verbose "Generating a new add folder batch"
+                                $FolderAddBatches.Add($FoldersToAddBatch)
+                                $FoldersToAddCount = 0
+                                $FoldersToAddBatch = New-CUBatchUpdate
+                            }
+                            Add-CUFolder -Name $pathElement -ParentPath $pathSoFar -Batch $FoldersToAddBatch
                         }
-                        Add-CUFolder -Name $pathElement -ParentPath $pathSoFar -Batch $FoldersToAddBatch
+                        else ## create folders immediately
+                        {
+                            if( -not $Preview )
+                            {
+                                Write-Verbose -Message "Creating folder `"$pathElement`" in `"$pathSoFar`""
+                                if( ! ( $folderCreated = Add-CUFolder -Name $pathElement -ParentPath $pathSoFar ) -or $folderCreated -notmatch "^Folder '$pathElement' was added successfully$" )
+                                {
+                                    Write-CULog -Msg "Failed to create folder `"$pathElement`" in `"$pathSoFar`" - $folderCreated" -ShowConsole -Type E
+                                }
+                            }
+                        }
                         $FoldersToAdd.Add("Add-CUFolder -Name `"$pathElement`" -ParentPath `"$pathSoFar`"")
                         $FoldersToAddCount++
                         $newFoldersAdded.Add( $absolutePath , $ExtFolderPath )
@@ -750,7 +771,7 @@ function Build-CUTree {
         Write-CULog -Msg "Committing Changes:" -ShowConsole -Color DarkYellow
         if ($ComputersRemoveBatches.Count -gt 0) { $errorCount += Execute-PublishCUUpdates -BatchObject $ComputersRemoveBatches -Message "Executing Computer Object Removal" }
         if ($FoldersToRemoveBatches.Count -gt 0) { $errorCount += Execute-PublishCUUpdates -BatchObject $FoldersToRemoveBatches -Message "Executing Folder Object Removal"   }
-        if ($FolderAddBatches.Count -gt 0)       { $errorCount += Execute-PublishCUUpdates -BatchObject $FolderAddBatches -Message "Executing Folder Object Adds"            }
+        if ($FolderAddBatches.Count -gt 0 -and $batchCreateFolders )       { $errorCount += Execute-PublishCUUpdates -BatchObject $FolderAddBatches -Message "Executing Folder Object Adds"            }
         if ($ComputersAddBatches.Count -gt 0)    { $errorCount += Execute-PublishCUUpdates -BatchObject $ComputersAddBatches -Message "Executing Computer Object Adds"       }
         if ($ComputersMoveBatches.Count -gt 0)   { $errorCount += Execute-PublishCUUpdates -BatchObject $ComputersMoveBatches -Message "Executing Computer Object Moves"     }
 
