@@ -451,3 +451,5 @@ if ($batchCreateFolders){
 }
 
 [int]$errorCount = Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams
+
+Exit $errorCount
