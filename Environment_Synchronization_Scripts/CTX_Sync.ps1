@@ -75,6 +75,7 @@
     Guy Leech,            2020-10-09 - Added parameter -enabledOnly to only include Delivery Groups which are enabled
     Guy Leech,            2020-10-13 - Accommodate Build-CUTree returning error count
     Guy Leech,            2020-10-30 - Fixed bug where -Adminaddress not passed to Get-BrokerDesktopGroup
+    Guy Leech,            2020-11-02 - Added -batchCreateFolders option to create folders in batches (faster) otherwise creates them one at a time
 
 .LINK
 
@@ -178,7 +179,13 @@ Param
         Mandatory=$false, 
         HelpMessage='Only adds Delivery Groups which are enabled'
     )]
-    [switch] $enabledOnly
+    [switch] $enabledOnly ,
+
+    [Parameter(
+    	Mandatory=$false,
+    	HelpMessage='Create folders in batches rather than individually'
+	)]
+	[switch] $batchCreateFolders
 ) 
 
 ## GRL this way allows script to be run with debug/verbose without changing script
@@ -378,7 +385,7 @@ foreach ($DeliveryGroup in $DeliveryGroups) {
 #Add Brokers to ControlUpEnvironmentalObject
 if ($addBrokersToControlUp) {
     if (-not($MatchEUCEnvTree)) {  # MatchEUCEnvTree will add environment specific brokers folders
-        if( $newObject = [ControlUpObject]::new( "Brokers" ,"Brokers","Folder","","Brokers","" ))
+        if( $newObject = [ControlUpObject]::new( 'Brokers' ,'Brokers' , 'Folder' , '' , 'Brokers' , '' ))
         {
             $ControlUpEnvironmentObject.Add( $newObject )
         }
@@ -391,7 +398,7 @@ if ($addBrokersToControlUp) {
         }
         $Domain = $Machine.MachineName.split("\")[0]
         $Name =$Machine.MachineName.split("\")[1]
-        if( $newObject = [ControlUpObject]::new( $Name , "Brokers" , "Computer" , $Domain , "$($Machine.site)-BrokerMachine" , $DNSName ))
+        if( $newObject = [ControlUpObject]::new( $Name , 'Brokers' , 'Computer' , $Domain , "$($Machine.site)-BrokerMachine" , $DNSName ))
         {
             $ControlUpEnvironmentObject.Add( $newObject )
         }
@@ -439,4 +446,10 @@ if ($Site){
     $BuildCUTreeParams.Add("SiteId",$Site)
 }
 
+if ($batchCreateFolders){
+    $BuildCUTreeParams.Add("batchCreateFolders",$true)
+}
+
 [int]$errorCount = Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams
+
+Exit $errorCount

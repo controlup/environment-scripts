@@ -60,6 +60,7 @@
     Wouter Kursten,         2020-08-11 - Original Code
     Guy Leech,              2020-09-23 - Added more logging for fatal errors to aid troubleshooting when run as ascheduled task
     Guy Leech,              2020-10-13 - Accommodate Build-CUTree returning error count
+    Guy Leech,              2020-11-05 - Added -batchCreateFolders option to create folders in batches (faster) otherwise creates them one at a time
 .LINK
 
 .COMPONENT
@@ -140,9 +141,13 @@ Param
         HelpMessage='File with a list of exceptions, machine names and/or desktop pools'
     )]
     [ValidateNotNullOrEmpty()]
-    [string] $Exceptionsfile
-
-
+    [string] $Exceptionsfile ,
+    
+    [Parameter(
+    	Mandatory=$false,
+    	HelpMessage='Create folders in batches rather than individually'
+	)]
+	[switch] $batchCreateFolders
 ) 
 
 ## GRL this way allows script to be run with debug/verbose without changing script
@@ -726,4 +731,10 @@ if ($Site){
     $BuildCUTreeParams.Add("SiteId",$Site)
 }
 
+if ($batchCreateFolders){
+    $BuildCUTreeParams.Add("batchCreateFolders",$true)
+}
+
 [int]$errorCount = Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams
+
+Exit $errorCount

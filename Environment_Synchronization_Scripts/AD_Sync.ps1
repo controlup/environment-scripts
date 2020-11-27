@@ -10,6 +10,7 @@
     Active Directory
 .MODIFICATION_HISTORY
     Trentent Tye,         07/30/20 - Original Code
+    Guy Leech,            11/05/20 - Added -batchCreateFolders option to create folders in batches (faster) otherwise creates them one at a time
 
 .LINK
 
@@ -76,7 +77,13 @@ Param
         HelpMessage='Enter a ControlUp Site'
     )]
     [ValidateNotNullOrEmpty()]
-    [string] $Site
+    [string] $Site ,
+
+    [Parameter(
+    	Mandatory=$false,
+    	HelpMessage='Create folders in batches rather than individually'
+	)]
+	[switch] $batchCreateFolders
 ) 
 
 ## GRL this way allows script to be run with debug/verbose without changing script
@@ -418,7 +425,12 @@ if ($Site){
     $BuildCUTreeParams.Add("SiteId",$Site)
 }
 
-Build-CUTree -ExternalTree $ADEnvironment @BuildCUTreeParams
+if ($batchCreateFolders){
+    $BuildCUTreeParams.Add("batchCreateFolders",$true)
+}
 
+[int]$errorCount = Build-CUTree -ExternalTree $ADEnvironment @BuildCUTreeParams
+
+Exit $errorCount
 
 #endregion WVD
