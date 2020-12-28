@@ -1,3 +1,22 @@
+
+<#
+    .SYNOPSIS
+        Provides the function Build-CUTree which creates/updates a ControlUp folder structure with an external source (Active Directory, Citrix, Horizon, WVD)
+
+    .DESCRIPTION
+        See the help for Build-CUTree for usage detail once the script has been dot sourced
+
+    .NOTES
+    
+    MODIFICATION_HISTORY
+
+        @guyrleech 2020-10-13   Build-CUTree returns error count
+        @guyrleech 2020-10-26   Bug fixed when deleting - path repeated organization name so never matched items to delete
+        @guyrleech 2020-10-30   Bug fixed where computers were not being deleted, fixed bug in dll version detection
+        @guyrleech 2020-11-02   Workaround for bug where batch folder creation fails where folder name already exists at top level
+        @guyrleech 2020-12-20   Reorganised help comment block to be get-help compatible for script and function
+#>
+
 <#
     .SYNOPSIS
 	    Synchronizes ControlUp folder structure with an external source (Active Directory, Citrix, Horizon, WVD)
@@ -26,7 +45,7 @@
         will be required to be stored with the user account/profile specified.  Please see the external source script you wish to you for further
         documentation.
 
-    .PARAMETER ExternalTree <Object>
+    .PARAMETER ExternalTree
         An object that represents the logical formation of your external object.
         The object should in this format:
 
@@ -43,20 +62,19 @@
                 WVDSH-0                Pay-As-You-Go Dev-Test\WVDHP         Computer AcmeOnAzure.onmicrosoft.com WVD SessionHost
                 WVDSH-1                Pay-As-You-Go Dev-Test\WVDHP         Computer AcmeOnAzure.onmicrosoft.com WVD SessionHost
 
-    .PARAMETER CURootFolder <string>
+    .PARAMETER CURootFolder
         The folder in the ControlUp console that will be the root for the ExternalTree. Do NOT specify the organization name in this path, just the folder path
         underneath. For instance, in ControlUp if I right-click the folder I want to use as my root, and select "Properties" the "path:" will say something like:
         "a.c.m.e.\vdi_and_sbc\wvd".  In this example, "a.c.m.e." is the organization name so ignore it and just enter the folders underneath, which in this
         example is "vdi_and_sbc\wvd".
 
-    .PARAMETER Delete <Switch>
+    .PARAMETER Delete
         Enables removal of excess objects in the sync directory. If a machine or folder object is found in the ControlUp path but not in the ExternalTree object
         the object will be marked for removal. If you do not use this parameter than only Add or Move operations will occur.
 
-    .PARAMETER Preview <switch>
+    .PARAMETER Preview
         Generates a preview showing the actions this script wants to take. If more than 25 operations is going to be executed the script will just
         return the number of operations. To see the individual operations use the PreviewOutputPath parameter. See that paramater help for more information.
-        The Preview parameter will output do the operation calculation and return the expected operations as in this sample:
             + CU Computers Count: 101
             + Organization Name: a.c.m.e.
             + Target Folder Paths:
@@ -87,14 +105,23 @@
                     > Executing Computer Object Adds. Batch 1/1
                     > Execution Time: PREVIEW MODE
 
-    .PARAMETER LogFile <path to log file>
+    .PARAMETER LogFile
         Specifies that all output will be saved to a log file. Individual operations will also be saved to the log file. The operations are saved in
         such a way that you should be able to copy-paste them into a powershell prompt that has the ControlUp Powershell modules loaded and they should
         be executable.  Use this for testing individual operations to validate it will work as you expect.
 
-    .PARAMETER SiteId <string>
+    .PARAMETER SiteId
         An optional parameter to specify which site you want the machine object assigned. By default, the site ID is "Default". Enter the name of the site
         to assign the object
+
+    .PARAMETER DebugCUMachineEnvironment
+        CONTROLUP INTERNAL USE ONLY
+
+    .PARAMETER DebugCUFolderEnvironment
+        CONTROLUP INTERNAL USE ONLY
+
+    .PARAMETER batchCreateFolders
+        Create ControlUp folders in batches rather than one by one
 
     .EXAMPLE
         Build-CUTree -ExternalTree $WVDEnvironment -CURootFolder "VDI_and_SBC\WVD" -Preview -Delete -PreviewOutputPath C:\temp\sync.log
@@ -104,19 +131,6 @@
         Build-CUTree -ExternalTree $WVDEnvironment -CURootFolder "VDI_and_SBC\WVD" -Delete
             Executes a sync of the $WVDEnvironment object to the ControlUp folder "VDI_and_SBC\WVD" with object removal enabled.
 
-    .CONTEXT
-
-    .MODIFICATION_HISTORY
-
-     @guyrleech 2020-10-13   Build-CUTree returns error count
-     @guyrleech 2020-10-26   Bug fixed when deleting - path repeated organization name so never matched items to delete
-     @guyrleech 2020-10-30   Bug fixed where computers were not being deleted, fixed bug in dll version detection
-     @guyrleech 2020-11-02   Workaround for bug where batch folder creation fails where folder name already exists at top level
-
-    .LINK
-        https://www.controlup.com
-
-    .COMPONENT
     .NOTES
 	    Runs on a ControlUp Monitor computer
 	    Connects to an external source, retrieves the folder structure to synchronize
@@ -124,8 +138,6 @@
 	    Moves folders and computers which exist in locations that differ from the external source
 	    Optionally, removes folders and computers which do not exist in the external source
 #>
-
-#region Bind input parameters
 function Build-CUTree {
     [CmdletBinding()]
     Param
@@ -429,7 +441,7 @@ function Build-CUTree {
             Write-Debug "Number of objects in DebugCUMachineEnvironment: $($DebugCUMachineEnvironment.count)"
             if ($($DebugCUMachineEnvironment.count) -eq 2) {
                 foreach ($envObjects in $DebugCUMachineEnvironment) {
-                    if  ($($envObjects  | gm).TypeName[0] -eq "Create-CrazyCUEnvironment.CUComputerObject") {
+                    if  ($($envObjects  | Get-Member).TypeName[0] -eq "Create-CrazyCUEnvironment.CUComputerObject") {
                         $CUComputers = $envObjects
                     }
                 }
