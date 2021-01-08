@@ -24,15 +24,15 @@
     A list of Connection Servers to contact for Horizon Pools,Farms and Computers to sync. Multiple Connection Servers can be specified if seperated by commas.
 
 .PARAMETER includeDesktopPools
-    Include only these specific Delivery Groups to be added to the ControlUp tree. Wild cards are supported as well, so if you have 
+    Include only these specific Delivery Groups to be added to the ControlUp tree. Wild cards are supported as well, so if you have
     Delivery Groups named like "Epic North", "Epic South" you can specify "Epic*" and it will capture both. Multiple delivery groups
     can be specified if they are seperated by commas. If you also use the parameter "excludeDeliveryGroups" then the exclude will
     supersede any includes and remove any matching Delivery Groups. Omitting this parameter and the script will capture all detected
     Delivery Groups.
 
 .PARAMETER excludeDesktopPools
-    Exclude specific delivery groups from being added to the ControlUp tree. Wild cards are supported as well, so if you have 
-    Delivery Groups named like "Epic CGY", "Cerner CGY" you can specify "*CGY" and it will exclude any that ends with CGY. Multiple 
+    Exclude specific delivery groups from being added to the ControlUp tree. Wild cards are supported as well, so if you have
+    Delivery Groups named like "Epic CGY", "Cerner CGY" you can specify "*CGY" and it will exclude any that ends with CGY. Multiple
     delivery groups can be specified if they are seperated by commas. If you also use the parameter "includeDeliveryGroup" then the exclude will
     supersede any includes and remove any matching Delivery Groups.
 
@@ -44,7 +44,7 @@
 
 .EXAMPLE
     . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local","ctxdc01.bottheory.local" -folderPath "CUSync\Citrix" -includeDeliveryGroup "EpicNorth","EpicSouth","EpicCentral","Cerner*" -excludeDeliveryGroup "CernerNorth" -addBrokersToControlUp -MatchEUCEnvTree
-        Contacts the brokers ddc1.bottheory.local and ctxdc01.bottheory.local, it will save the objects to the ControlUp folder 
+        Contacts the brokers ddc1.bottheory.local and ctxdc01.bottheory.local, it will save the objects to the ControlUp folder
         "CUSync\Citrix", only include specific Delivery Groups including all Delivery Groups that start wtih Cerner and exclude
         the Delivery Group "CernerNorth", adds the broker machines to ControlUp, have the script match the same structure as
         the ControlUp EUC Environment.
@@ -62,7 +62,9 @@
     Guy Leech,              2020-10-13 - Accommodate Build-CUTree returning error count
     Guy Leech,              2020-11-13 - Added getting RDS servers
     Guy Leech,              2020-11-26 - Changed folder structure created in CU
-
+    Guy Leech,              2020-12-16 - Added findpool code
+    Guy Leech,              2020-12-24 - Verbose output for findpools result for troubleshooting missing machines
+    Guy Leech,              2021-01-06 - Use findpools output to find any pools not already retrieved
 .LINK
 
 .COMPONENT
@@ -83,7 +85,7 @@
 Param
 (
     [Parameter(
-        Mandatory=$true, 
+        Mandatory=$true,
         HelpMessage='Enter a ControlUp subfolder to save your Horizon tree'
     )]
     [ValidateNotNullOrEmpty()]
@@ -95,13 +97,13 @@ Param
     [ValidateNotNullOrEmpty()]
     [switch] $Preview,
 
-    [Parameter( 
+    [Parameter(
         HelpMessage='Base URL used to logon to VMware Cloud'
     )]
     [ValidateNotNullOrEmpty()]
     [string]$base = 'cloud-us-2' , ## get this from the URL shown after manual logon to VMware cloud
 
-    [Parameter( 
+    [Parameter(
         HelpMessage='Execute removal operations. When combined with preview it will only display the proposed changes'
     )]
     [ValidateNotNullOrEmpty()]
@@ -130,7 +132,7 @@ Param
     )]
     [ValidateNotNullOrEmpty()]
     [string] $Exceptionsfile
-) 
+)
 
 ## GRL this way allows script to be run with debug/verbose without changing script
 $VerbosePreference = $(if( $PSBoundParameters[ 'verbose' ] ) { $VerbosePreference } else { 'SilentlyContinue' })
@@ -156,77 +158,6 @@ if( ! ( Test-Path -Path $buildCuTreeScriptPath -PathType Leaf -ErrorAction Silen
 
 . $buildCuTreeScriptPath
 
-#region JWT
-
-## https://gallery.technet.microsoft.com/JWT-Token-Decode-637cf001
-## For decoding JWT (Java Web Tokens) we get from Horizon Cloud
-
-function Convert-FromBase64StringWithNoPadding([string]$data)
-{
-    $data = $data.Replace( '-' , '+').Replace( '_' , '/' )
-    switch ($data.Length % 4)
-    {
-        0 { break }
-        2 { $data += '==' }
-        3 { $data += '=' }
-        default { throw New-Object ArgumentException('data') }
-    }
-    return [System.Convert]::FromBase64String($data)
-}
-
-function Decode-JWT( [string]$rawToken )
-{
-    [string[]]$parts = $rawToken.Split('.')
-    if( $parts -and $parts.Count -ge 2 )
-    {
-        $headers = [System.Text.Encoding]::UTF8.GetString( (Convert-FromBase64StringWithNoPadding -data $parts[0]) )
-        $claims  = [System.Text.Encoding]::UTF8.GetString( (Convert-FromBase64StringWithNoPadding -data $parts[1]) )
-        $signature = (Convert-FromBase64StringWithNoPadding $parts[2])
-        
-        Write-Verbose -Message ("JWT`r`n.headers: {0}`r`n.claims: {1}`r`n.signature: {2}`r`n" -f $headers,$claims,[System.BitConverter]::ToString($signature))
-
-        [PSCustomObject]@{
-            headers = $headers | ConvertFrom-Json
-            claims = $claims | ConvertFrom-Json
-            signature = $signature
-        }
-    }
-    else
-    {
-        Write-Warning -Message "Bad JWT token $rawToken"
-    }
-}
-
-function Get-JwtTokenData
-{
-    [CmdletBinding()]  
-    Param
-    (
-        # Param1 help description
-        [Parameter(Mandatory)]
-        [string] $Token,
-        [switch] $Recurse
-    )
-    
-    if ($Recurse)
-    {
-        Decode-JWT -rawToken ([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($Token)))
-    }
-    else
-    {
-        Decode-JWT -rawToken $Token
-    }
-}
-
-#endregion JWT
-
-function Make-NameWithSafeCharacters ([string]$string) {
-    ###### TODO need to replace the folder path characters that might be illegal
-    #list of illegal characters : '/', '\', ':', '*','?','"','<','>','|','{','}'
-    $returnString = (($string).Replace("/","-")).Replace("\","-").Replace(":","-").Replace("*","-").Replace("?","-").Replace("`"","-").Replace("<","-").Replace(">","-").Replace("|","-").Replace("{","-").Replace("}","-")
-    return $returnString
-}
-    
 function Get-CUStoredCredential {
     param (
         [parameter(Mandatory = $true,
@@ -310,7 +241,7 @@ function Write-CULog {
     if ($LogFile) {
         Write-Output "$date | $LogType | $Msg"  | Out-file $($LogFile) -Append
     }
-    
+
     If (!($ShowConsole)) {
         IF (($Type -eq "W") -or ($Type -eq "E" )) {
             #IF ($VerbosePreference -eq 'SilentlyContinue') {
@@ -319,7 +250,7 @@ function Write-CULog {
             #}
         }
         ELSE {
-            Write-Verbose -Msg "$PreMsg $Msg"
+            Write-Verbose -Message "$PreMsg $Msg"
             $Color = $null
         }
 
@@ -375,12 +306,12 @@ public class SSLHandler
 
 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = [SSLHandler]::GetSSLHandler()
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
-    
+
 $sessionVariable = $null
 
 [string]$baseURL = "https://$base.horizon.vmware.com"
 
-[hashtable]$RESTparams = @{ 
+[hashtable]$RESTparams = @{
     'ContentType' = 'application/json'
     'Method' = 'Post'
 }
@@ -389,7 +320,7 @@ $sessionVariable = $null
 
 ## 1. logon with myVmware account
 
-[hashtable]$authParams = @{ 
+[hashtable]$authParams = @{
         username = $myVMwareCredential.UserName
         password = $myVMwareCredential.GetNetworkCredential().Password.ToCharArray()
 }
@@ -451,15 +382,6 @@ if( ! $authentication -or $null -eq $authentication.PSObject.Properties[ 'apiTok
     Throw "No apiToken returned from AD logon"
 }
 
-<#
-if( ! ( $jwt = Get-JwtTokenData -Token $authentication.apiToken ) )
-{
-    Throw "Failed to decode jwt returned from AD logon"
-}
-
-Write-Verbose -Message "Customer id is $($jwt.claims.customerId), tenant id is $($jwt.claims.tenantId)"
-#>
-
 #Create ControlUp structure object for synchronizing
 class ControlUpObject{
     [string]$Name
@@ -480,7 +402,7 @@ class ControlUpObject{
 
 # Get the content of the exception file and put it into an array
 if ($Exceptionsfile){
-    [array]$exceptionlist=get-content -Path $Exceptionsfile
+    [array]$exceptionlist= get-content -Path $Exceptionsfile
 }
 else {
     $exceptionlist=@()
@@ -495,11 +417,11 @@ else {
 $ControlUpEnvironmentObject = New-Object System.Collections.Generic.List[PSObject]
 
 $RESTparams.Headers = @{ 'Authorization' = "Bearer $($authentication.apiToken)" ; 'Accept' = 'application/json' ; 'Content-Type' = 'application/json' }
-$RESTparams.Method = 'GET'
-$RESTparams.Remove( 'Body' )
 
 ## 6. Get broker type
 
+$RESTparams.Remove( 'Body' )
+$RESTparams.Method = 'GET'
 $RESTparams.uri = $baseURL + '/api/cloudbrokersync/brokerPreference'
 
 try
@@ -547,6 +469,7 @@ catch
 }
 
 [hashtable]$parentFolders = @{}
+[hashtable]$poolsProcessed = @{}
 
 if( ! $farms -or ! $farms.Count )
 {
@@ -574,6 +497,11 @@ else
         {
             $vms | Select-Object -Property name , guestOs , numcpus , memorySizeMB , ipaddress , activesessions , poolname , pooltype , vmpowerstate | Format-Table -AutoSize | Out-String | Write-Verbose
 
+            if( $null -eq $poolsProcessed[ $farm.name ] )
+            {
+                $poolsProcessed.Add( $farm.name , $vms.Count )
+            }
+
             ForEach( $VM in $VMs )
             {
                 [string]$divider = $poolTypeToFolder[ $VM.pooltype ]
@@ -585,7 +513,7 @@ else
                     $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new( (Split-Path -Path $baseFolder -Leaf) , $baseFolder , 'Folder' , "" , "" ,"" )) )
                     $parentFolders.Add( $baseFolder , $true )
                 }
-                
+
                 [string]$farmLabel = "Farm $($farm.name)"
                 [string]$nextLevel = Join-Path -Path $baseFolder -ChildPath $farmLabel
 
@@ -612,9 +540,9 @@ if( ! $assignments -or $assignments.status -ne 'SUCCESS' )
 else
 {
     Write-Verbose -Message "Got $($assignments.data.Count) assignments"
-    
+
     ##$ControlUpEnvironmentObject.Add( ([ControlUpObject]::new( $Pooldivider , $Pooldivider , 'Folder' , "" , "" ,"" )) )
- 
+
     ForEach( $pool in $assignments.data )
     {
         $RESTparams.Uri = $baseURL + ( '/api/mcw/assignments/{0}?workspace=true&containers=true' -f $pool.id )
@@ -639,7 +567,7 @@ else
                 ForEach( $machineGroup in $desktopContainer.machine_groups )
                 {
                     $RESTparams.Uri = $baseURL + ( '/dt-rest/v100/infrastructure/pool/desktop/{0}/vms' -f $machineGroup.pool_or_farm_id )
-                
+
                     try
                     {
                         $poolVMs = Invoke-RestMethod @RESTparams
@@ -655,6 +583,11 @@ else
                         Write-Verbose -Message "Got $($poolVMs.Count) VMs in pool $($machineGroup.name)"
                         $poolVMs | Select-Object -property name , guestOS , numcpus , memorySizeMB , ipaddress , sessionAllocationState , poolname , pooltype , vmpowerstate | Format-Table -AutoSize | Out-String | Write-Verbose
 
+                        if( $null -eq $poolsProcessed[ $pool.name ] )
+                        {
+                            $poolsProcessed.Add( $pool.name , $poolVMs.Count )
+                        }
+
                         ForEach( $poolVm in $poolVMs )
                         {
                             [string]$divider = $poolTypeToFolder[ $poolVM.pooltype ]
@@ -666,7 +599,7 @@ else
                                 $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new( (Split-Path -Path $baseFolder -Leaf) , $baseFolder , 'Folder' , "" , "" ,"" )) )
                                 $parentFolders.Add( $baseFolder , $true )
                             }
-                
+
                             [string]$poolName = $poolVM.poolname
                             if( $poolName -match "^$($pool.name)-[0-9a-f]{8}$" )
                             {
@@ -689,6 +622,89 @@ else
                     }
                 }
             }
+        }
+    }
+}
+
+Write-Verbose -Message "Processed $($poolsProcessed.Count) pools"
+$poolsProcessed.GetEnumerator() | Format-Table -AutoSize | Out-String | Write-Verbose
+
+## See if there are any pools and thence VMs which we do not already have
+
+$RESTparams.Uri = $baseURL + '/dt-rest/v100/pool/manager/findpools'
+$RESTparams.Method = 'POST'
+$RESTparams.Body = ( @{ searchName = '*' ; skipBuiltInPools = $true } | ConvertTo-Json ).ToString()
+
+try
+{
+    $pools = Invoke-RestMethod @RESTparams ## for single pod broker customer, not universal
+}
+catch
+{
+    $pools = $null
+    Throw "Failed to get pools via $($RESTparams.uri) : $_"
+}
+
+$RESTparams.Method = 'GET'
+$RESTparams.Remove( 'Body' )
+
+if( $pools )
+{
+    [int]$totalSize = $pools | Measure-Object -Property actualSize -Sum | Select-Object -ExpandProperty Sum
+    Write-Verbose -Message "Got $($pools.Count) pools from /findpools, containing $totalSize machines"
+    $pools | Select-Object -Property Name, HydraNodeName , PoolSessionType , PoolSizeType , sessionBased , actualSize , requestedSize , domainName , provisioningState , poolOnline | Format-Table -AutoSize | Out-String | Write-Verbose
+
+    ForEach( $pool in $pools )
+    {
+        ## check pool name not already processed - could be decorated , e.g. Floating-45016da6 for Floating
+        if( ( $null -eq ( $existingPool = $poolsProcessed[ $pool.name ] ) ) -and ( $null -eq ( $existingPool = $poolsProcessed[ ($pool.name -creplace '-[0-9a-f]{8}$' ) ] ) ) )
+        {
+            $RESTparams.Uri = $baseURL + ( '/dt-rest/v100/infrastructure/pool/desktop/{0}/vms' -f $pool.id )
+
+            try
+            {
+                if( $poolVMs = Invoke-RestMethod @RESTparams )
+                {
+                    Write-Verbose -Message "Got $($poolVMs.Count) VMs in /findpools pool $($pool.name)"
+                    $poolVMs | Select-Object -property name , guestOS , numcpus , memorySizeMB , ipaddress , sessionAllocationState , poolname , pooltype , vmpowerstate | Format-Table -AutoSize | Out-String | Write-Verbose
+
+                    ForEach( $poolVm in $poolVMs )
+                    {
+                        [string]$divider = $poolTypeToFolder[ $poolVM.pooltype ]
+                        [string]$baseFolder = Join-Path -Path "Pod $($poolVm.hydraNodeName)" -ChildPath $divider
+
+                        ## requested folder structure is POD\VDI Desktops\Pool
+                        if( ! $parentFolders[ $baseFolder ] )
+                        {
+                            $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new( (Split-Path -Path $baseFolder -Leaf) , $baseFolder , 'Folder' , "" , "" ,"" )) )
+                            $parentFolders.Add( $baseFolder , $true )
+                        }
+
+                        [string]$poolName = $poolVM.poolname -creplace '-[0-9a-f]{8}$'
+                        [string]$poolLabel = "Pool $poolName"
+                        [string]$nextLevel = Join-Path -Path $baseFolder -ChildPath $poolLabel
+
+                        ## requested folder structure is POD\VDI Desktops\Pool
+                        if( ! $parentFolders[ $nextLevel ] )
+                        {
+                            $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new( (Split-Path -Path $nextLevel -Leaf) , $nextLevel , 'Folder' , "" , "" ,"" )) )
+                            $parentFolders.Add( $nextLevel , $true )
+                        }
+
+                        Write-Verbose -Message "Adding computer $($poolVM.name) to folder `"$nextLevel`""
+
+                        $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new( $poolVM.name , $nextLevel , 'Computer' , ( $poolVM.dnsname.Split( '@' )[-1] ) ,"" , $poolVM.dnsname )))
+                    }
+                }
+            }
+            catch
+            {
+                Write-Warning -Message "Failed to get desktops for pool $($pool.Name) id $($pool.id)"
+            }
+        }
+        else
+        {
+            Write-Verbose -Message "Already got $existingPool VMs in existing pool `"$($pool.Name)`""
         }
     }
 }
