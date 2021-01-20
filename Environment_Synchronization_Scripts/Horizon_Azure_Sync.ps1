@@ -20,38 +20,11 @@
 .PARAMETER Site
     Specify a ControlUp Monitor Site to assign the objects.
 
-.PARAMETER Connection_servers
-    A list of Connection Servers to contact for Horizon Pools,Farms and Computers to sync. Multiple Connection Servers can be specified if seperated by commas.
-
-.PARAMETER includeDesktopPools
-    Include only these specific Delivery Groups to be added to the ControlUp tree. Wild cards are supported as well, so if you have
-    Delivery Groups named like "Epic North", "Epic South" you can specify "Epic*" and it will capture both. Multiple delivery groups
-    can be specified if they are seperated by commas. If you also use the parameter "excludeDeliveryGroups" then the exclude will
-    supersede any includes and remove any matching Delivery Groups. Omitting this parameter and the script will capture all detected
-    Delivery Groups.
-
-.PARAMETER excludeDesktopPools
-    Exclude specific delivery groups from being added to the ControlUp tree. Wild cards are supported as well, so if you have
-    Delivery Groups named like "Epic CGY", "Cerner CGY" you can specify "*CGY" and it will exclude any that ends with CGY. Multiple
-    delivery groups can be specified if they are seperated by commas. If you also use the parameter "includeDeliveryGroup" then the exclude will
-    supersede any includes and remove any matching Delivery Groups.
-
-.PARAMETER LocalPodOnly
-    Configures the script to sync only the local Pod to ControlUp
-
-.PARAMETER LocalSiteOnly
-    Configures the script to sync only the local Site to ControlUp
+.PARAMETER Base
+    get this from the URL shown after manual logon to VMware cloud
 
 .EXAMPLE
-    . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local","ctxdc01.bottheory.local" -folderPath "CUSync\Citrix" -includeDeliveryGroup "EpicNorth","EpicSouth","EpicCentral","Cerner*" -excludeDeliveryGroup "CernerNorth" -addBrokersToControlUp -MatchEUCEnvTree
-        Contacts the brokers ddc1.bottheory.local and ctxdc01.bottheory.local, it will save the objects to the ControlUp folder
-        "CUSync\Citrix", only include specific Delivery Groups including all Delivery Groups that start wtih Cerner and exclude
-        the Delivery Group "CernerNorth", adds the broker machines to ControlUp, have the script match the same structure as
-        the ControlUp EUC Environment.
-
-.EXAMPLE
-    . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local" -folderPath "CUSync"
-        Contacts the brokers ddc1.bottheory.local and adds all Delivery Groups and their machines to ControlUp under the folder "CUSync"
+    "C:\CU Environment Sync Scripts\Horizon_Azure_Sync.ps1"  -folderPath "\Datacenter\Virtual Desktops\Horizon Cloud"  -logfile "C:\CU Environment Sync Scripts\HZ Azure Sync.log" -base "cloud-us-2"
 
 .CONTEXT
     VMware Horizon
@@ -65,19 +38,19 @@
     Guy Leech,              2020-12-16 - Added findpool code
     Guy Leech,              2020-12-24 - Verbose output for findpools result for troubleshooting missing machines
     Guy Leech,              2021-01-06 - Use findpools output to find any pools not already retrieved
+    Wouter Kursten,         2021-01-21 - removed unused parameters and updated synopsis
 .LINK
 
 .COMPONENT
 
 .NOTES
-    Requires rights to read Citrix environment.
+    Requires rights to read Horizon on Azure environment.
 
     Version:        0.1
-    Author:         Wouter Kursten
-    Creation Date:  2020-08-06
-    Updated:        2020-08-06
-                    Changed ...
-    Purpose:        Created for VMware Horizon Sync
+    Author:         Guy Leech
+    Creation Date:  2020-09-23
+
+    Purpose:        Created for VMware Horizon on Azure Sync
 #>
 
 [CmdletBinding()]
@@ -115,23 +88,11 @@ Param
     [ValidateNotNullOrEmpty()]
     [string] $LogFile,
 
-    [Parameter(
-        HelpMessage='Synchronise the local site only'
-    )]
-    [ValidateNotNullOrEmpty()]
-    [switch] $LocalHVSiteOnly,
-
    [Parameter(
         HelpMessage='Enter a ControlUp Site'
     )]
     [ValidateNotNullOrEmpty()]
-    [string] $Site,
-
-    [Parameter(
-        HelpMessage='File with a list of exceptions, machine names and/or desktop pools'
-    )]
-    [ValidateNotNullOrEmpty()]
-    [string] $Exceptionsfile
+    [string] $Site
 )
 
 ## GRL this way allows script to be run with debug/verbose without changing script

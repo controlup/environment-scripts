@@ -29,6 +29,9 @@
 .PARAMETER LocalHVSiteOnly
     Configures the script to sync only the local Horizon Site to ControlUp
 
+.PARAMETER batchCreateFolders
+    Takesa care of adding folders in batches for better performance
+
 .EXAMPLE
     To only add new machines use .\Horizon_Sync.ps1 -HVConnectionServerFQDN connectionserver.domain.com -folderPath "root_folder\Horizon"
 
