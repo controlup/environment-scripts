@@ -20,47 +20,47 @@
 .PARAMETER Site
     Specify a ControlUp Monitor Site to assign the objects.
 
-.PARAMETER ConnectionServer
-    FQDN for one of the connection servers.
+.PARAMETER HVConnectionServerFQDN
+    Connection server fqdn  to contact for Horizon Pools,Farms and Computers to sync. Multiple Connection Servers can be specified if seperated by commas.
+
+.PARAMETER exceptionsfile
+    file with a list of exceptions that will be applied to both Desktop Pools, RDS Farms and machine names.
 
 .PARAMETER LocalHVSiteOnly
-    Configures the script to sync only the local Site to ControlUp
+    Configures the script to sync only the local Horizon Site to ControlUp
 
 .EXAMPLE
-    . .\CU_SyncScript.ps1 -ConnectionServer "connectionserver.domain.example" -folderPath "CUSync\Horizon" 
-        Contacts the connection server connectionserver.domain.example, discover and connect to all other pods in the cloud pod federation. Tt will save the objects to the ControlUp folder 
-        "CUSync\Horizon". I
+    . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local","ctxdc01.bottheory.local" -folderPath "CUSync\Citrix" -includeDeliveryGroup "EpicNorth","EpicSouth","EpicCentral","Cerner*" -excludeDeliveryGroup "CernerNorth" -addBrokersToControlUp -MatchEUCEnvTree
+        Contacts the brokers ddc1.bottheory.local and ctxdc01.bottheory.local, it will save the objects to the ControlUp folder 
+        "CUSync\Citrix", only include specific Delivery Groups including all Delivery Groups that start wtih Cerner and exclude
+        the Delivery Group "CernerNorth", adds the broker machines to ControlUp, have the script match the same structure as
+        the ControlUp EUC Environment.
 
 .EXAMPLE
-    \CU_SyncScript.ps1 -ConnectionServer "connectionserver.domain.example" -folderPath "CUSync\Horizon" -localHVsite only
-        Contacts the connection server connectionserver.domain.example, discover and connect to all other pods in the local Site in the cloud pod federation. It will save the objects to the ControlUp folder 
-        "CUSync\Horizon".
+    . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local" -folderPath "CUSync"
+        Contacts the brokers ddc1.bottheory.local and adds all Delivery Groups and their machines to ControlUp under the folder "CUSync"
 
 .CONTEXT
     VMware Horizon
 
 .MODIFICATION_HISTORY
-<<<<<<< HEAD
-    Wouter Kursten,         2020-08-18 - Original Code
-
-=======
     Wouter Kursten,         2020-08-11 - Original Code
     Guy Leech,              2020-09-23 - Added more logging for fatal errors to aid troubleshooting when run as ascheduled task
     Guy Leech,              2020-10-13 - Accommodate Build-CUTree returning error count
     Guy Leech,              2020-11-05 - Added -batchCreateFolders option to create folders in batches (faster) otherwise creates them one at a time
->>>>>>> 09a18f0ae1da661f97d91103f4e9522a20eae029
+    Wouter Kursten          2021-01-18 - Updates Synopsis
 .LINK
+    https://support.controlup.com/hc/en-us/articles/360015912718
 
 .COMPONENT
 
 .NOTES
-    Requires rights to connect to the Horizon API's and read the Horizon environment.
+    Requires at least Read rights to Horizon environment.
 
     Version:        0.1
     Author:         Wouter Kursten
     Creation Date:  2020-08-06
-    Updated:        2020-08-06
-                    Changed ...
+    Updated:        2021-01-18
     Purpose:        Created for VMware Horizon Sync
 #>
 
@@ -89,7 +89,7 @@ Param
         HelpMessage='FQDN of the connectionserver'
     )]
     [ValidateNotNullOrEmpty()]
-    [string] $ConnectionServer,
+    [string] $HVConnectionServerFQDN,
 
     [Parameter(
         Position=3, 
@@ -115,7 +115,7 @@ Param
     [ValidateNotNullOrEmpty()]
     [switch] $LocalHVSiteOnly,
 
-   [Parameter(
+    [Parameter(
         Position=6, 
         Mandatory=$false, 
         HelpMessage='Enter a ControlUp Site'
@@ -130,10 +130,10 @@ Param
     )]
     [ValidateNotNullOrEmpty()]
     [string] $Exceptionsfile ,
-    
+
     [Parameter(
-    	Mandatory=$false,
-    	HelpMessage='Create folders in batches rather than individually'
+        Mandatory=$false,
+        HelpMessage='Create folders in batches rather than individually'
 	)]
 	[switch] $batchCreateFolders
 ) 
@@ -148,12 +148,6 @@ $ProgressPreference = 'SilentlyContinue'
 [string]$RDSDivider="RDS Farms"
 [string]$buildCuTreeScript = 'Build-CUTree.ps1' ## Script from ControlUp which must reside in the same folder as this script
 
-<<<<<<< HEAD
-$Pooldivider="Desktop Pools"
-$RDSDivider="RDS Farms"
-
-=======
->>>>>>> 09a18f0ae1da661f97d91103f4e9522a20eae029
 # dot sourcing Functions
 ## GRL Don't assume user has changed location so get the script path instead
 [string]$scriptPath = Split-Path -Path (& { $myInvocation.ScriptName }) -Parent
@@ -166,11 +160,8 @@ if( ! ( Test-Path -Path $buildCuTreeScriptPath -PathType Leaf -ErrorAction Silen
     Throw $errorMessage
 }
 
-<<<<<<< HEAD
-=======
 . $buildCuTreeScriptPath
 
->>>>>>> 09a18f0ae1da661f97d91103f4e9522a20eae029
 function Make-NameWithSafeCharacters ([string]$string) {
     ###### TODO need to replace the folder path characters that might be illegal
     #list of illegal characters : '/', '\', ':', '*','?','"','<','>','|','{','}'
@@ -493,7 +484,7 @@ if( ! $CredsHorizon )
 }
 
 # Connect to the Horizon View Connection Server
-[VMware.VimAutomation.HorizonView.Impl.V1.ViewObjectImpl]$objHVConnectionServer = Connect-HorizonConnectionServer -HVConnectionServerFQDN $ConnectionServer -Credential $CredsHorizon
+[VMware.VimAutomation.HorizonView.Impl.V1.ViewObjectImpl]$objHVConnectionServer = Connect-HorizonConnectionServer -HVConnectionServerFQDN $HVConnectionServerFQDN -Credential $CredsHorizon
 
 if( ! $objHVConnectionServer )
 {
@@ -555,6 +546,8 @@ if ($Exceptionsfile){
 else {
     $exceptionlist=@()
 }
+
+
 
 $ControlUpEnvironmentObject = New-Object System.Collections.Generic.List[PSObject]
 
@@ -658,6 +651,7 @@ foreach ($hvconnectionserver in $hvconnectionservers){
         if($ControlUpEnvironmentObject.name -notcontains $RDSDivider){
             $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new("$RDSDivider" ,"$Farmspath","Folder","","$($podname)-Pod","")))
         }
+        
 
         foreach ($HVFarm in $HVFarms){
             # Create the variable for the batch of machines that will be used to add and remove machines
