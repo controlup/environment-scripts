@@ -58,7 +58,7 @@
     Guy Leech,              2020-09-23 - Added more logging for fatal errors to aid troubleshooting when run as ascheduled task
     Guy Leech,              2020-10-13 - Accommodate Build-CUTree returning error count
     Guy Leech,              2020-11-05 - Added -batchCreateFolders option to create folders in batches (faster) otherwise creates them one at a time
-    Wouter Kursten          2021-01-18 - Updates Synopsis
+    Wouter Kursten          2021-01-21 - Updates Synopsis
 .LINK
     https://support.controlup.com/hc/en-us/articles/360015912718
 
