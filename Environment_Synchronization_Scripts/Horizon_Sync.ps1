@@ -40,8 +40,15 @@
     VMware Horizon
 
 .MODIFICATION_HISTORY
+<<<<<<< HEAD
     Wouter Kursten,         2020-08-18 - Original Code
 
+=======
+    Wouter Kursten,         2020-08-11 - Original Code
+    Guy Leech,              2020-09-23 - Added more logging for fatal errors to aid troubleshooting when run as ascheduled task
+    Guy Leech,              2020-10-13 - Accommodate Build-CUTree returning error count
+    Guy Leech,              2020-11-05 - Added -batchCreateFolders option to create folders in batches (faster) otherwise creates them one at a time
+>>>>>>> 09a18f0ae1da661f97d91103f4e9522a20eae029
 .LINK
 
 .COMPONENT
@@ -78,7 +85,7 @@ Param
 
     [Parameter(
         Position=2, 
-        Mandatory=$false, 
+        Mandatory=$true, 
         HelpMessage='FQDN of the connectionserver'
     )]
     [ValidateNotNullOrEmpty()]
@@ -122,23 +129,48 @@ Param
         HelpMessage='File with a list of exceptions, machine names and/or desktop pools'
     )]
     [ValidateNotNullOrEmpty()]
-    [string] $Exceptionsfile
-
-
+    [string] $Exceptionsfile ,
+    
+    [Parameter(
+    	Mandatory=$false,
+    	HelpMessage='Create folders in batches rather than individually'
+	)]
+	[switch] $batchCreateFolders
 ) 
 
-## For debugging uncomment
-$ErrorActionPreference = 'Stop'
-$VerbosePreference = 'continue'
-#$DebugPreference = 'SilentlyContinue'
-Set-StrictMode -Version Latest
+## GRL this way allows script to be run with debug/verbose without changing script
+$VerbosePreference = $(if( $PSBoundParameters[ 'verbose' ] ) { $VerbosePreference } else { 'SilentlyContinue' })
+$DebugPreference = $(if( $PSBoundParameters[ 'debug' ] ) { $DebugPreference } else { 'SilentlyContinue' })
+$ErrorActionPreference = $(if( $PSBoundParameters[ 'erroraction' ] ) { $ErrorActionPreference } else { 'Stop' })
+$ProgressPreference = 'SilentlyContinue'
 
+[string]$Pooldivider="Desktop Pools"
+[string]$RDSDivider="RDS Farms"
+[string]$buildCuTreeScript = 'Build-CUTree.ps1' ## Script from ControlUp which must reside in the same folder as this script
+
+<<<<<<< HEAD
 $Pooldivider="Desktop Pools"
 $RDSDivider="RDS Farms"
 
+=======
+>>>>>>> 09a18f0ae1da661f97d91103f4e9522a20eae029
 # dot sourcing Functions
-. ".\Build-CUTree.ps1"
+## GRL Don't assume user has changed location so get the script path instead
+[string]$scriptPath = Split-Path -Path (& { $myInvocation.ScriptName }) -Parent
+[string]$buildCuTreeScriptPath = [System.IO.Path]::Combine( $scriptPath , $buildCuTreeScript )
 
+if( ! ( Test-Path -Path $buildCuTreeScriptPath -PathType Leaf -ErrorAction SilentlyContinue ) )
+{
+    [string]$errorMessage = "Unable to find script `"$buildCuTreeScript`" in `"$scriptPath`""
+    Write-CULog -Msg $errorMessage -ShowConsole -Type E
+    Throw $errorMessage
+}
+
+<<<<<<< HEAD
+=======
+. $buildCuTreeScriptPath
+
+>>>>>>> 09a18f0ae1da661f97d91103f4e9522a20eae029
 function Make-NameWithSafeCharacters ([string]$string) {
     ###### TODO need to replace the folder path characters that might be illegal
     #list of illegal characters : '/', '\', ':', '*','?','"','<','>','|','{','}'
@@ -154,7 +186,26 @@ function Get-CUStoredCredential {
     )
     # Get the stored credential object
     [string]$strCUCredFolder = "$([environment]::GetFolderPath('CommonApplicationData'))\ControlUp\ScriptSupport"
-    Import-Clixml $strCUCredFolder\$($env:USERNAME)_$($System)_Cred.xml
+    [string]$strCUCredFile = Join-Path -Path "$strCUCredFolder" -ChildPath "$($env:USERNAME)_$($System)_Cred.xml"
+    if( ! ( Test-Path -Path $strCUCredFile -ErrorAction SilentlyContinue ) )
+    {
+        [string]$errorMessage = "Unable to find stored credential file `"$strCUCredFile`" - have you previously run the `"Create Credentials for Horizon Scripts`" script for user $env:username ?"
+        Write-CULog -Msg $errorMessage -ShowConsole -Type E
+        Throw $errorMessage
+    }
+    else
+    {
+        Try
+        {
+            Import-Clixml -Path $strCUCredFile
+        }
+        Catch
+        {
+            [string]$errorMessage = "Error reading stored credentials from `"$strCUCredFile`" : $_"
+            Write-CULog -Msg $errorMessage -ShowConsole -Type E
+            Throw $errorMessage
+        }
+    }
 }
 
 function Load-VMWareModules {
@@ -212,7 +263,7 @@ function Connect-HorizonConnectionServer {
         Connect-HVServer -Server $HVConnectionServerFQDN -Credential $Credential
     }
     catch {
-        Write-CULog -Msg 'There was a problem connecting to the Horizon View Connection server.' -ShowConsole -Type E
+        Write-CULog -Msg "There was a problem connecting to the Horizon View Connection server: $_" -ShowConsole -Type E
     }
 }
 
@@ -426,7 +477,7 @@ function Write-CULog {
 }
 
 # Set the credentials location
-[string]$strCUCredFolder = "$([environment]::GetFolderPath('CommonApplicationData'))\ControlUp\ScriptSupport"
+[string]$strCUCredFolder = "$([environment]::GetFolderPath( [Environment+SpecialFolder]::CommonApplicationData ))\ControlUp\ScriptSupport"
 
 # Import the VMware PowerCLI modules
 Load-VMwareModules -Components @('VimAutomation.HorizonView')
@@ -434,8 +485,22 @@ Load-VMwareModules -Components @('VimAutomation.HorizonView')
 # Get the stored credentials for running the script
 [PSCredential]$CredsHorizon = Get-CUStoredCredential -System 'HorizonView'
 
+if( ! $CredsHorizon )
+{
+    [string]$errorMessage = "Failed to get stored credentials for $env:username for HorizonView"
+    Write-CULog -Msg $errorMessage -ShowConsole -Type E
+    Throw $errorMessage
+}
+
 # Connect to the Horizon View Connection Server
 [VMware.VimAutomation.HorizonView.Impl.V1.ViewObjectImpl]$objHVConnectionServer = Connect-HorizonConnectionServer -HVConnectionServerFQDN $ConnectionServer -Credential $CredsHorizon
+
+if( ! $objHVConnectionServer )
+{
+    [string]$errorMessage = "Failed to connect to Horizon Connection Server $HVConnectionServerFQDN as $($CredsHorizon.UserName)"
+    Write-CULog -Msg $errorMessage -ShowConsole -Type E
+    Throw $errorMessage
+}
 
 #Create ControlUp structure object for synchronizing
 class ControlUpObject{
@@ -485,7 +550,7 @@ else {
 }
 # Get the content of the exception file and put it into an array
 if ($Exceptionsfile){
-    [array]$exceptionlist=get-content $Exceptionsfile
+    [array]$exceptionlist=get-content -Path $Exceptionsfile
 }
 else {
     $exceptionlist=@()
@@ -499,13 +564,14 @@ foreach ($hvconnectionserver in $hvconnectionservers){
         # Retreive the name of the pod
 
         $pods=$objHVConnectionServer.extensionData.pod.Pod_list()
-        [string]$podname=$pods | where-object {$_.localpod -eq $True} | select-object -expandproperty Displayname
+        [string]$podname = $pods | where-object localpod -eq $True | select-object -expandproperty Displayname
 
         Write-CULog -Msg "Processing Pod $podname"
 
         # Add folder with the podname to the batch
         [string]$targetfolderpath="$podname"
-        $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$podname" ,"$podname","Folder","","",""))
+        $object = [ControlUpObject]::new("$podname" ,"$podname","Folder","","","")
+        $ControlUpEnvironmentObject.Add( $object )
 
     }
     else{
@@ -514,19 +580,22 @@ foreach ($hvconnectionserver in $hvconnectionservers){
         [string]$targetfolderpath=""
     }
     # Get the Horizon View desktop Pools
-    [array]$HVPools = Get-HVDesktopPools -HVConnectionServer $objHVConnectionServer
+    [array]$HVPools = @( Get-HVDesktopPools -HVConnectionServer $objHVConnectionServer )
     
 
     if($NULL -ne $hvpools){
-        [array]$HVPools = $HVPools | Where-Object {$exceptionlist -notcontains $_.DesktopSummaryData.Name}
+        Write-CULog -Msg "Pools count is $($HVPools.Count) before applying exception list of $($exceptionlist.Count)"
+        [array]$HVPools = @( $HVPools.Where( { $exceptionlist -notcontains $_.DesktopSummaryData.Name} ) )
+        Write-CULog -Msg "Pools count is $($HVPools.Count) after  applying exception list of $($exceptionlist.Count)"
+        [array]$HVPools = @( $HVPools.Where( { $exceptionlist -notcontains $_.DesktopSummaryData.Name} ) )
         if($targetfolderpath -eq ""){
             [string]$Poolspath=$Pooldivider
         }
         else{
-            [string]$Poolspath=$targetfolderpath+"\"+$Pooldivider
+            [string]$Poolspath= Join-Path -Path $targetfolderpath -ChildPath $Pooldivider
         }
         if($ControlUpEnvironmentObject.name -notcontains $Pooldivider){
-            $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$Pooldivider" ,"$Poolspath","Folder","","$($podname)-Pod",""))
+            $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new("$Pooldivider" ,"$Poolspath","Folder","","$($podname)-Pod","")) )
         }
 
         # first the folders for the pools need to be created
@@ -535,16 +604,17 @@ foreach ($hvconnectionserver in $hvconnectionservers){
             $poolname=($hvpool).DesktopSummaryData.Name
             Write-CULog -Msg "Processing Desktop Pool $poolname"
             [string]$poolnamepath=$Poolspath+"\"+$poolname
-            $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$poolname" ,"$poolnamepath","Folder","","$($poolname)-Pool",""))
+            $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new("$poolname" ,"$poolnamepath","Folder","","$($poolname)-Pool","")) )
 
             # Retreive all the desktops in the desktop pool.
-            [array]$HVDesktopmachines=@{}
-            $HVDesktopmachines = Get-HVDesktopMachines -HVPoolID $HVPool.id -HVConnectionServer $objHVConnectionServer
-            if($NULL -ne $HVDesktopmachines) {
+            [array]$HVDesktopmachines = @( Get-HVDesktopMachines -HVPoolID $HVPool.id -HVConnectionServer $objHVConnectionServer )
+            if($NULL -ne $HVDesktopmachines -and $HVDesktopmachines.Count -gt 0 ) {
             # Filtering out any desktops without a DNS name
-            $HVDesktopmachines = $HVDesktopmachines | where-object {$_.base.dnsname -ne $null}
+            $HVDesktopmachines = $HVDesktopmachines.Where( {$_.base.dnsname -ne $null} )
             # Remove machines in the exceptionlist
-            [array]$HVDesktopmachines = $HVDesktopmachines | Where-Object {$exceptionlist -notcontains $_.base.dnsname}
+            Write-CULog -Msg "Desktop machines count is $($HVDesktopmachines.Count) before applying exception list of $($exceptionlist.Count)"
+            [array]$HVDesktopmachines = @( $HVDesktopmachines.Where( { $exceptionlist -notcontains $_.base.dnsname } ) )
+            Write-CULog -Msg "Desktop machines count is $($HVDesktopmachines.Count) after  applying exception list of $($exceptionlist.Count)"
                 foreach ($HVDesktopmachine in $HVDesktopmachines){
                     $dnsname=$HVDesktopmachine.base.dnsname
                     # Try to convert to lowercase
@@ -567,7 +637,7 @@ foreach ($hvconnectionserver in $hvconnectionservers){
                         Write-CULog -Msg "Error retreiving the domainname from the DNS name" -ShowConsole -Type E
                     }
                     #add-cucomputer -name $toaddname -domain $domainname -folderpath $poolnamepath -Batch $batch
-                    $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$toaddname" ,"$poolnamepath","Computer","$domainname","$($poolname)-Pool","$dnsname"))
+                    $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new("$toaddname" ,"$poolnamepath","Computer","$domainname","$($poolname)-Pool","$dnsname")))
                 }
             }
         }
@@ -576,7 +646,9 @@ foreach ($hvconnectionserver in $hvconnectionservers){
     [array]$HVFarms = Get-HVfarms -HVConnectionServer $objHVConnectionServer
     
     if ($NULL -ne $hvfarms){
+        Write-CULog -Msg "Farms count is $($HVFarms.Count) before applying exception list of $($exceptionlist.Count)"
         [array]$HVFarms = $HVFarms | Where-Object {$exceptionlist -notcontains $_.Data.Name}
+        Write-CULog -Msg "Farms count is $($HVFarms.Count) after  applying exception list of $($exceptionlist.Count)"
         if($targetfolderpath -eq ""){
             [string]$Farmspath=$RDSDivider
         }
@@ -584,14 +656,14 @@ foreach ($hvconnectionserver in $hvconnectionservers){
             [string]$Farmspath=$targetfolderpath+"\"+$RDSDivider
         }
         if($ControlUpEnvironmentObject.name -notcontains $RDSDivider){
-            $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$RDSDivider" ,"$Farmspath","Folder","","$($podname)-Pod",""))
+            $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new("$RDSDivider" ,"$Farmspath","Folder","","$($podname)-Pod","")))
         }
 
         foreach ($HVFarm in $HVFarms){
             # Create the variable for the batch of machines that will be used to add and remove machines
             $farmname=($hvfarm).Data.Name
             [string]$farmnamepath=$Farmspath+"\"+$farmname
-            $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$farmname" ,"$farmnamepath","Folder","","$($farmname)-Pool",""))
+            $ControlUpEnvironmentObject.Add(([ControlUpObject]::new("$farmname" ,"$farmnamepath","Folder","","$($farmname)-Pool","")))
             $farmname=($hvfarm).Data.Name
             Write-CULog -Msg "Processing RDS Farm $farmname"
             # Retreive all the desktops in the desktop pool.
@@ -601,7 +673,9 @@ foreach ($hvconnectionserver in $hvconnectionservers){
             if($HVfarmmachines -ne ""){
                 $HVfarmmachines = $HVfarmmachines | where-object {$_.AgentData.dnsname -ne $null}
                 # Remove machines in the exceptionlist
+                Write-CULog -Msg "Farm machine count is $($HVfarmmachines.Count) before applying exception list of $($exceptionlist.Count)"
                 [array]$HVfarmmachines = $HVfarmmachines | Where-Object {$exceptionlist -notcontains $_.AgentData.dnsname}
+                Write-CULog -Msg "Farm machine count is $($HVfarmmachines.Count) after  applying exception list of $($exceptionlist.Count)"
                 # Create List with desktops that need to be removed
                 foreach ($HVfarmmachine in $HVfarmmachines){
                     $dnsname=$HVfarmmachine.AgentData.dnsname
@@ -623,14 +697,13 @@ foreach ($hvconnectionserver in $hvconnectionservers){
                     catch {
                         Write-CULog -Msg "Error retreiving the domainname from the DNS name" -ShowConsole -Type E
                     }
-                    $ControlUpEnvironmentObject.Add([ControlUpObject]::new("$toaddname" ,"$farmnamepath","Computer","$domainname","$($farmname)-Farm","$dnsname"))
+                    $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new("$toaddname" ,"$farmnamepath","Computer","$domainname","$($farmname)-Farm","$dnsname")) )
                 }
             }
         }
     }
     Disconnect-HorizonConnectionServer -HVConnectionServer $objHVConnectionServer
 }
-$ControlUpEnvironmentObject | fl
 
 $BuildCUTreeParams = @{
     CURootFolder = $folderPath
@@ -652,4 +725,10 @@ if ($Site){
     $BuildCUTreeParams.Add("SiteId",$Site)
 }
 
-Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams
+if ($batchCreateFolders){
+    $BuildCUTreeParams.Add("batchCreateFolders",$true)
+}
+
+[int]$errorCount = Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams
+
+Exit $errorCount

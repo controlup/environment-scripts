@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Creates the folder structure and adds/removes or moves machines into the structure.
 
@@ -40,6 +40,9 @@
     Add brokers to the ControlUp Tree. This optional parameter can be specified if you prefer this script to add broker machines as they
     are detected. If this parameter is omitted then Broker machines will not be moved or added to your ControlUp tree.
 
+.PARAMETER enabledOnly
+    Only include Delivery Groups which are enabled
+
 .PARAMETER MatchEUCEnvTree
     Configures the script to match the same structure used by ControlUp for the EUC Environment Tree. If this parameter is omitted the
     Delivery Group is added to the FolderPath. 
@@ -68,6 +71,11 @@
 
 .MODIFICATION_HISTORY
     Trentent Tye,         2020-08-06 - Original Code
+    Guy Leech,            2020-09-16 - Fix missing siteid hashtable, changed from dot sourcing common module from cwd to same path as this sript
+    Guy Leech,            2020-10-09 - Added parameter -enabledOnly to only include Delivery Groups which are enabled
+    Guy Leech,            2020-10-13 - Accommodate Build-CUTree returning error count
+    Guy Leech,            2020-10-30 - Fixed bug where -Adminaddress not passed to Get-BrokerDesktopGroup
+    Guy Leech,            2020-11-02 - Added -batchCreateFolders option to create folders in batches (faster) otherwise creates them one at a time
 
 .LINK
 
@@ -165,17 +173,30 @@ Param
         HelpMessage='Adds the Citrix Brokers to the ControlUp tree'
     )]
     [ValidateNotNullOrEmpty()]
-    [switch] $addBrokersToControlUp
+    [switch] $addBrokersToControlUp ,
+
+    [Parameter(
+        Mandatory=$false, 
+        HelpMessage='Only adds Delivery Groups which are enabled'
+    )]
+    [switch] $enabledOnly ,
+
+    [Parameter(
+    	Mandatory=$false,
+    	HelpMessage='Create folders in batches rather than individually'
+	)]
+	[switch] $batchCreateFolders
 ) 
 
+## GRL this way allows script to be run with debug/verbose without changing script
+$VerbosePreference = $(if( $PSBoundParameters[ 'verbose' ] ) { $VerbosePreference } else { 'SilentlyContinue' })
+$DebugPreference = $(if( $PSBoundParameters[ 'debug' ] ) { $DebugPreference } else { 'SilentlyContinue' })
+$ErrorActionPreference = $(if( $PSBoundParameters[ 'erroraction' ] ) { $ErrorActionPreference } else { 'Stop' })
+$ProgressPreference = 'SilentlyContinue'
 
+## Script from ControlUp which must reside in the same folder as this script
+[string]$buildCuTreeScript = 'Build-CUTree.ps1'
 
-## For debugging uncomment
-$ErrorActionPreference = 'Stop'
-$VerbosePreference = 'continue'
-#$DebugPreference = 'SilentlyContinue'
-Set-StrictMode -Version Latest
-
 function Make-NameWithSafeCharacters ([string]$string) {
     ###### TODO need to replace the folder path characters that might be illegal
     #list of illegal characters : '/', '\', ':', '*','?','"','<','>','|','{','}'
@@ -202,21 +223,45 @@ class ControlUpObject{
 }
 
 # dot sourcing Functions
-. ".\Build-CUTree.ps1"
 
-# Add Citrix snap-ins
-Add-PSSnapin -Name Citrix*
+## GRL Don't assume user has changed location so get the script path instead
+[string]$scriptPath = Split-Path -Path (& { $myInvocation.ScriptName }) -Parent
+[string]$buildCuTreeScriptPath = [System.IO.Path]::Combine( $scriptPath , $buildCuTreeScript )
+
+if( ! ( Test-Path -Path $buildCuTreeScriptPath -PathType Leaf -ErrorAction SilentlyContinue ) )
+{
+    Throw "Unable to find script `"$buildCuTreeScript`" in `"$scriptPath`""
+}
+
+. $buildCuTreeScriptPath
+
+# Add required Citrix cmdlets
+
+## new CVAD have modules so use these in preference to snapins which are there for backward compatibility
+if( ! (  Import-Module -Name Citrix.DelegatedAdmin.Commands -ErrorAction SilentlyContinue -PassThru -Verbose:$false) `
+    -and ! ( Add-PSSnapin -Name Citrix.Broker.Admin.* -ErrorAction SilentlyContinue -PassThru -Verbose:$false) )
+{
+    Throw 'Failed to load Citrix PowerShell cmdlets - is this a Delivery Controller or have Studio or the PowerShell SDK installed ?'
+}
 
 Write-Host "Brokers: $Brokers"
 $DeliveryGroups = New-Object System.Collections.Generic.List[PSObject]
 $BrokerMachines = New-Object System.Collections.Generic.List[PSObject]
 $CTXSites       = New-Object System.Collections.Generic.List[PSObject]
+
+[hashtable]$brokerParameters = @{ }
+if( $enabledOnly )
+{
+    $brokerParameters.Add( 'Enabled' , $true )
+}
+
 foreach ($adminAddr in $brokers) {
+    $brokerParameters.AdminAddress = $adminAddr
     $CTXSite = Get-BrokerSite -AdminAddress $adminAddr
     $CTXSites.Add($CTXSite)
     Write-Verbose -Message "Querying $adminAddr for Delivery Groups"
     #Get list of Delivery Groups
-    foreach ($DeliveryGroup in $(Get-BrokerDesktopGroup -AdminAddress $adminAddr)) {
+    foreach ($DeliveryGroup in $(Get-BrokerDesktopGroup @brokerParameters)) {
         if ($DeliveryGroups.Count -eq 0) {
             $DeliveryGroupObject = [PSCustomObject]@{
                     MachineName         = ""
@@ -308,7 +353,10 @@ Write-Verbose -Message "Total Number of Delivery Groups after filtering for excl
 Write-Host "Adding Delivery Groups to ControlUp Environmental Object"
 $ControlUpEnvironmentObject = New-Object System.Collections.Generic.List[PSObject]
 foreach ($DeliveryGroup in $DeliveryGroups) {
-    $ControlUpEnvironmentObject.Add([ControlUpObject]::new($($DeliveryGroup.Name) ,"$($DeliveryGroup.Name)","Folder","","$($DeliveryGroup.site)-DeliveryGroup",""))
+    if( $newObject = [ControlUpObject]::new($($DeliveryGroup.Name) ,"$($DeliveryGroup.Name)","Folder","","$($DeliveryGroup.site)-DeliveryGroup",""))
+    {
+        $ControlUpEnvironmentObject.Add( $newObject )
+    }
 }
 
 #Add machines from the delivery group to the environmental object
@@ -326,7 +374,10 @@ foreach ($DeliveryGroup in $DeliveryGroups) {
             }
             $Domain = $Machine.MachineName.split("\")[0]
             $Name =$Machine.MachineName.split("\")[1]
-            $ControlUpEnvironmentObject.Add([ControlUpObject]::new($($Name) ,"$($DeliveryGroup.Name)","Computer","$Domain","$($DeliveryGroup.site)-Machine","$DNSName"))
+            if( $newObject = [ControlUpObject]::new( $Name , $DeliveryGroup.Name , "Computer" , $Domain , "$($DeliveryGroup.site)-Machine" , $DNSName ) )
+            {
+                $ControlUpEnvironmentObject.Add( $newObject )
+            }
         }
     }
 }
@@ -334,7 +385,10 @@ foreach ($DeliveryGroup in $DeliveryGroups) {
 #Add Brokers to ControlUpEnvironmentalObject
 if ($addBrokersToControlUp) {
     if (-not($MatchEUCEnvTree)) {  # MatchEUCEnvTree will add environment specific brokers folders
-        $ControlUpEnvironmentObject.Add([ControlUpObject]::new("Brokers" ,"Brokers","Folder","","Brokers",""))
+        if( $newObject = [ControlUpObject]::new( 'Brokers' ,'Brokers' , 'Folder' , '' , 'Brokers' , '' ))
+        {
+            $ControlUpEnvironmentObject.Add( $newObject )
+        }
     }
     foreach ($Machine in $BrokerMachines) {
         if ([string]::IsNullOrEmpty($machine.DNSName)) {
@@ -344,7 +398,10 @@ if ($addBrokersToControlUp) {
         }
         $Domain = $Machine.MachineName.split("\")[0]
         $Name =$Machine.MachineName.split("\")[1]
-        $ControlUpEnvironmentObject.Add([ControlUpObject]::new($($Name) ,"Brokers","Computer","$Domain","$($Machine.site)-BrokerMachine","$DNSName"))
+        if( $newObject = [ControlUpObject]::new( $Name , 'Brokers' , 'Computer' , $Domain , "$($Machine.site)-BrokerMachine" , $DNSName ))
+        {
+            $ControlUpEnvironmentObject.Add( $newObject )
+        }
     }
 }
 ## TYE
@@ -359,12 +416,15 @@ if ($MatchEUCEnvTree) {
     }
     if ($addBrokersToControlUp) {
         foreach ($CtxSite in $($CTXSites | Sort-Object -Unique)) {
-            $ControlUpEnvironmentObject.Add([ControlUpObject]::new("Brokers" ,"$($CTXSite.Name)\Brokers","Folder","","Brokers",""))
+            if( $newObject = [ControlUpObject]::new("Brokers" ,"$($CTXSite.Name)\Brokers","Folder","","Brokers",""))
+            {
+                $ControlUpEnvironmentObject.Add( $newObject )
+            }
         }
     }
 }
 
-Write-Debug "$($ControlUpEnvironmentObject | ft | Out-String)"
+Write-Debug "$($ControlUpEnvironmentObject | Format-Table | Out-String)"
 
 $BuildCUTreeParams = @{
     CURootFolder = $folderPath
@@ -386,5 +446,10 @@ if ($Site){
     $BuildCUTreeParams.Add("SiteId",$Site)
 }
 
-Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams
+if ($batchCreateFolders){
+    $BuildCUTreeParams.Add("batchCreateFolders",$true)
+}
 
+[int]$errorCount = Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams
+
+Exit $errorCount
