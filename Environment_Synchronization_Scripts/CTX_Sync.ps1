@@ -20,6 +20,9 @@
 .PARAMETER Site
     Specify a ControlUp Monitor Site to assign the objects.
 
+.PARAMETER DNSName
+    Use an alternate DNS suffix instead of the default domain suffix.
+
 .PARAMETER Brokers
     A list of brokers to contact for Delivery Groups and Computers to sync. Multiple brokers can be specified if seperated by commas.
 
@@ -65,6 +68,11 @@
 .EXAMPLE
     . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local" -folderPath "CUSync"
         Contacts the brokers ddc1.bottheory.local and adds all Delivery Groups and their machines to ControlUp under the folder "CUSync"
+
+.EXAMPLE
+    . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local" -folderPath "CUSync" -DNSName ext.ad.bottheory.local
+        Contacts the brokers ddc1.bottheory.local and adds all Delivery Groups and their machines to ControlUp under the folder "CUSync", but 
+        the machines are added as $name.ext.ad.bottheory.local
 
 .CONTEXT
     Citrix
@@ -185,7 +193,13 @@ Param
     	Mandatory=$false,
     	HelpMessage='Create folders in batches rather than individually'
 	)]
-	[switch] $batchCreateFolders
+	[switch] $batchCreateFolders,
+
+    [Parameter(
+    	Mandatory=$false,
+    	HelpMessage='Use an alternate DNS suffix instead of the default suffix'
+	)]
+	[string] $DNSName
 ) 
 
 ## GRL this way allows script to be run with debug/verbose without changing script
@@ -261,7 +275,7 @@ if ($brokers.count -eq 1 -and $brokers[0].IndexOf(',') -ge 0) {
 
 foreach ($adminAddr in $brokers) {
     $brokerParameters.AdminAddress = $adminAddr
-    $CTXSite = Get-BrokerSite -AdminAddress $adminAddr -MaxRecordCount 10000
+    $CTXSite = Get-BrokerSite -AdminAddress $adminAddr
     $CTXSites.Add($CTXSite)
     Write-Verbose -Message "Querying $adminAddr for Delivery Groups"
     #Get list of Delivery Groups
@@ -452,6 +466,10 @@ if ($Site){
 
 if ($batchCreateFolders){
     $BuildCUTreeParams.Add("batchCreateFolders",$true)
+}
+
+if ($DNSName){
+    $BuildCUTreeParams.Add("DNSName",$DNSName)
 }
 
 [int]$errorCount = Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams
