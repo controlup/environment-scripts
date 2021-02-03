@@ -26,7 +26,7 @@
 .PARAMETER exceptionsfile
     file with a list of exceptions that will be applied to both Desktop Pools, RDS Farms and machine names.
 
-.PARAMETER LocalHVSiteOnly
+.PARAMETER LocalHVPodOnly
     Configures the script to sync only the local Horizon Site to ControlUp
 
 .PARAMETER batchCreateFolders
@@ -45,7 +45,7 @@
     To add and remove machines and use filtering on either pool,farm or machine use .\Horizon_Sync.ps1 -HVConnectionServerFQDN connectionserver.domain.com -folderPath "root_folder\Horizon" -delete -exceptionfile "c:\path\to\exceptionfile.txt"
 
 .EXAMPLE
-    To add and remove machines for only the local Horizon site use .\Horizon_Sync.ps1 -HVConnectionServerFQDN connectionserver.domain.com -folderPath "root_folder\Horizon" -delete -localhvsiteonly
+    To add and remove machines for only the local Horizon site use .\Horizon_Sync.ps1 -HVConnectionServerFQDN connectionserver.domain.com -folderPath "root_folder\Horizon" -delete -LocalHVPodOnly
 
 .EXAMPLE
     To add and remove machines use and specify a ControlUp site yse .\Horizon_Sync.ps1 -HVConnectionServerFQDN connectionserver.domain.com -folderPath "root_folder\Horizon" -delete -site sitename
@@ -126,7 +126,7 @@ Param
         HelpMessage='Synchronise the local site only'
     )]
     [ValidateNotNullOrEmpty()]
-    [switch] $LocalHVSiteOnly,
+    [switch] $LocalHVPodOnly,
 
     [Parameter(
         Position=6,
@@ -532,7 +532,7 @@ if ($HVpodstatus.status -eq "ENABLED"){
     [array]$HVpods=$objHVConnectionServer.ExtensionData.Pod.Pod_List()
     # retreive the first connection server from each pod
     $HVPodendpoints=@()
-    if ($LocalHVSiteOnly){
+    if ($LocalHVPodOnly){
         Write-CULog -Msg "Synchronising local site only"
         $hvlocalpod=$hvpods | where-object {$_.LocalPod -eq $true}
         $hvlocalsite=$objHVConnectionServer.ExtensionData.Site.Site_Get($hvlocalpod.site)
@@ -578,6 +578,11 @@ foreach ($hvconnectionserver in $hvconnectionservers){
 
         # Add folder with the podname to the batch
         [string]$targetfolderpath="$podname"
+        if ($LocalHVPodOnly){
+            $folderpath = $folderpath + "\" + $targetfolderpath
+            $targetfolderpath = ""
+        }
+        write-host $folderpath
         $object = [ControlUpObject]::new("$podname" ,"$podname","Folder","","","")
         $ControlUpEnvironmentObject.Add( $object )
 
@@ -713,6 +718,9 @@ foreach ($hvconnectionserver in $hvconnectionservers){
     }
     Disconnect-HorizonConnectionServer -HVConnectionServer $objHVConnectionServer
 }
+
+
+
 
 $BuildCUTreeParams = @{
     CURootFolder = $folderPath
