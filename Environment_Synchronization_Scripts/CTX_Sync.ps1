@@ -255,6 +255,10 @@ if( $enabledOnly )
     $brokerParameters.Add( 'Enabled' , $true )
 }
 
+if ($brokers.count -eq 1 -and $brokers[0].IndexOf(',') -ge 0) {
+    $brokers = $brokers -split ','
+}
+
 foreach ($adminAddr in $brokers) {
     $brokerParameters.AdminAddress = $adminAddr
     $CTXSite = Get-BrokerSite -AdminAddress $adminAddr
