@@ -719,8 +719,7 @@ foreach ($hvconnectionserver in $hvconnectionservers){
     Disconnect-HorizonConnectionServer -HVConnectionServer $objHVConnectionServer
 }
 
-
-
+Write-Debug "$($ControlUpEnvironmentObject | Format-Table | Out-String)"
 
 $BuildCUTreeParams = @{
     CURootFolder = $folderPath
