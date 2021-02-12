@@ -534,16 +534,15 @@ if ($HVpodstatus.status -eq "ENABLED"){
     $HVPodendpoints=@()
     if ($LocalHVPodOnly){
         Write-CULog -Msg "Synchronising local site only"
-        $hvlocalpod=$hvpods | where-object {$_.LocalPod -eq $true}
-        $hvlocalsite=$objHVConnectionServer.ExtensionData.Site.Site_Get($hvlocalpod.site)
-        foreach ($hvpod in $hvlocalsite.pods){$HVPodendpoints+=$objHVConnectionServer.ExtensionData.PodEndpoint.PodEndpoint_list($hvpod) | select-object -first 1}
-        }
+	$hvconnectionservers=$hvConnectionServerfqdn
+	}
 
     else {
             [array]$HVPodendpoints += foreach ($hvpod in $hvpods) {$objHVConnectionServer.ExtensionData.PodEndpoint.PodEndpoint_List($hvpod.id) | select-object -first 1}
+	    [array]$hvconnectionservers=$HVPodendpoints.serveraddress.replace("https://","").replace(":8472/","")
     }
     # Convert from url to only the name
-    [array]$hvconnectionservers=$HVPodendpoints.serveraddress.replace("https://","").replace(":8472/","")
+    
     # Disconnect from the current connection server
     Disconnect-HorizonConnectionServer -HVConnectionServer $objHVConnectionServer
 }
