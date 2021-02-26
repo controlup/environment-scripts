@@ -47,6 +47,9 @@
 .EXAMPLE
     To add and remove machines for only the local Horizon site use .\Horizon_Sync.ps1 -HVConnectionServerFQDN connectionserver.domain.com -folderPath "root_folder\Horizon" -delete -LocalHVPodOnly
 
+.PARAMETER force
+    When the number of new folders to create is large, force the operation to continue otherwise it will abort before commencing
+
 .EXAMPLE
     To add and remove machines use and specify a ControlUp site yse .\Horizon_Sync.ps1 -HVConnectionServerFQDN connectionserver.domain.com -folderPath "root_folder\Horizon" -delete -site sitename
 
@@ -62,6 +65,8 @@
     Guy Leech,              2020-10-13 - Accommodate Build-CUTree returning error count
     Guy Leech,              2020-11-05 - Added -batchCreateFolders option to create folders in batches (faster) otherwise creates them one at a time
     Wouter Kursten          2021-01-21 - Updates Synopsis
+    Guy Leech,              2021-02-12 - Added -force for when large number of folders to add
+
 .LINK
     https://support.controlup.com/hc/en-us/articles/360015912718
 
@@ -80,76 +85,42 @@
 [CmdletBinding()]
 Param
 (
-    [Parameter(
-        Position=0,
-        Mandatory=$true,
-        HelpMessage='Enter a ControlUp path to save your Horizon tree'
-    )]
+    [Parameter(Mandatory=$true,  HelpMessage='Enter a ControlUp subfolder to save your Horizon tree' )]
     [ValidateNotNullOrEmpty()]
     [string] $folderPath,
 
-    [Parameter(
-        Position=1,
-        Mandatory=$false,
-        HelpMessage='Preview the changes'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(Mandatory=$false, HelpMessage='Preview the changes' )]
     [switch] $Preview,
 
-    [Parameter(
-        Position=2,
-        Mandatory=$true,
-        HelpMessage='FQDN of the connectionserver'
-    )]
+    [Parameter(Mandatory=$true,  HelpMessage='FQDN of the connectionserver' )]
     [ValidateNotNullOrEmpty()]
     [string] $HVConnectionServerFQDN,
 
-    [Parameter(
-        Position=3,
-        Mandatory=$false,
-        HelpMessage='Execute removal operations. When combined with preview it will only display the proposed changes'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(Mandatory=$false, HelpMessage='Execute removal operations. When combined with preview it will only display the proposed changes' )]
     [switch] $Delete,
 
-    [Parameter(
-        Position=4,
-        Mandatory=$false,
-        HelpMessage='Enter a path to generate a log file of the proposed changes'
-    )]
+    [Parameter(Mandatory=$false, HelpMessage='Enter a path to generate a log file of the proposed changes' )]
     [ValidateNotNullOrEmpty()]
     [string] $LogFile,
 
-    [Parameter(
-        Position=5,
-        Mandatory=$false,
-        HelpMessage='Synchronise the local site only'
-    )]
-    [ValidateNotNullOrEmpty()]
-    [switch] $LocalHVPodOnly,
+    [Parameter(Mandatory=$false, HelpMessage='Synchronise the local site only' )]
+    [switch] $LocalHVSiteOnly,
 
-    [Parameter(
-        Position=6,
-        Mandatory=$false,
-        HelpMessage='Enter a ControlUp Site'
-    )]
+    [Parameter(Mandatory=$false,  HelpMessage='Enter a ControlUp Site name')]
     [ValidateNotNullOrEmpty()]
     [string] $Site,
 
-    [Parameter(
-        Position=7,
-        Mandatory=$false,
-        HelpMessage='File with a list of exceptions, machine names and/or desktop pools'
-    )]
+    [Parameter(Mandatory=$false, HelpMessage='File with a list of exceptions, machine names and/or desktop pools' )]
     [ValidateNotNullOrEmpty()]
     [string] $Exceptionsfile ,
+    
+    [Parameter(Mandatory=$false, HelpMessage='Create folders in batches rather than individually')]
+	[switch] $batchCreateFolders ,
 
-    [Parameter(
-        Mandatory=$false,
-        HelpMessage='Create folders in batches rather than individually'
-	)]
-	[switch] $batchCreateFolders
-)
+    [Parameter(Mandatory=$false, HelpMessage='Force folder creation if number exceeds safe limit' )]
+	[switch] $force
+) 
+
 
 ## GRL this way allows script to be run with debug/verbose without changing script
 $VerbosePreference = $(if( $PSBoundParameters[ 'verbose' ] ) { $VerbosePreference } else { 'SilentlyContinue' })
@@ -737,11 +708,15 @@ if ($LogFile){
 }
 
 if ($Site){
-    $BuildCUTreeParams.Add("SiteId",$Site)
+    $BuildCUTreeParams.Add("SiteName",$Site)
 }
 
 if ($batchCreateFolders){
     $BuildCUTreeParams.Add("batchCreateFolders",$true)
+}
+
+if ($Force){
+    $BuildCUTreeParams.Add("Force",$true)
 }
 
 [int]$errorCount = Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams

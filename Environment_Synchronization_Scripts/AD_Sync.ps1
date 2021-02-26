@@ -2,22 +2,53 @@
 <#
 .SYNOPSIS
     Creates the folder structure and adds/removes or moves machines into the structure.
+
 .DESCRIPTION
-    Creates the folder structure and adds/removes or moves machines into the structure.
+
+.PARAMETER folderPath
+    The target folder path in ControlUp to save these Objects.
+
+.PARAMETER OU
+    The AD OU to sync with ControlUp. Child OUs will also be added where the ControlUp folder structure will be the same as that of the OUs
+
+.PARAMETER Preview
+     Shows the expected results without committing any changes to the ControlUp environment
+
+.PARAMETER Delete
+    Enables the script to execute object removals. Use with -Preview to see the proposed changes without committing changes.
+
+.PARAMETER LogFile
+    Tells the script to log the output to a text file. Can be used with -Preview to see the proposed changes.
+
+.PARAMETER Site
+    Name of the ControlUp site to add the machines to. If not specified the default site will be used
+
+.PARAMETER batchCreateFolders
+    Create folders in batches rather than sequentially
+
+.PARAMETER force
+    When the number of new folders to create is large, force the operation to continue otherwise it will abort before commencing
+
 .EXAMPLE
-    . .\AD_SyncScript.ps1 -OU "OU=TestOU,DC=bottheory,DC=local"
+    & .\AD_SyncScript.ps1 -OU "OU=TestOU,DC=bottheory,DC=local" -FolderPath 'Script Test\AD'
+
 .CONTEXT
     Active Directory
+
 .MODIFICATION_HISTORY
     Trentent Tye,         07/30/20 - Original Code
     Guy Leech,            11/05/20 - Added -batchCreateFolders option to create folders in batches (faster) otherwise creates them one at a time
+    Guy Leech,            11/02/21 - Improved help. Added -force for when large number of folders to add
 
 .LINK
 
 .COMPONENT
 
 .NOTES
-    Requires rights to read active directory. In testing in the lab I was able to process 10,000 computer objects and 20 OU's in ~12 seconds
+
+    Must be run on a machine with the ControlUp Monitor installed.
+
+    Requires rights to read active directory.
 
     Version:        0.1
     Author:         Trentent Tye
@@ -31,59 +62,35 @@
 [CmdletBinding()]
 Param
 (
-    [Parameter(
-        Position=0, 
-        Mandatory=$true, 
-        HelpMessage='Enter a ControlUp subfolder to save your WVD tree' ## GRL WVD??
-    )]
+    [Parameter(Mandatory=$true, HelpMessage='Enter a ControlUp subfolder to save your AD tree to')]
     [ValidateNotNullOrEmpty()]
     [string] $folderPath,
 
-    [Parameter(
-        Position=1, 
-        Mandatory=$true, 
-        HelpMessage='Enter the Distinguished Name of the OU to sync'
-    )]
+    [Parameter(Mandatory=$true, HelpMessage='Enter the Distinguished Name of the OU to sync')]
     [ValidateNotNullOrEmpty()]
     [string] $OU,
 
-    [Parameter(
-        Position=2, 
-        Mandatory=$false, 
-        HelpMessage='Preview the changes'
-    )]
+    [Parameter(Mandatory=$false, HelpMessage='Preview the changes' )]
     [ValidateNotNullOrEmpty()]
     [switch] $Preview,
 
-    [Parameter(
-        Position=3, 
-        Mandatory=$false, 
-        HelpMessage='Execute removal operations. When combined with preview it will only display the proposed changes'
-    )]
+    [Parameter(Mandatory=$false, HelpMessage='Execute removal operations. When combined with preview it will only display the proposed changes')]
     [ValidateNotNullOrEmpty()]
     [switch] $Delete,
 
-    [Parameter(
-        Position=4, 
-        Mandatory=$false, 
-        HelpMessage='Enter a path to generate a log file of the proposed changes'
-    )]
+    [Parameter(Mandatory=$false, HelpMessage='Enter a path to generate a log file of the proposed changes')]
     [ValidateNotNullOrEmpty()]
     [string] $LogFile,
 
-      [Parameter(
-        Position=5, 
-        Mandatory=$false, 
-        HelpMessage='Enter a ControlUp Site'
-    )]
+    [Parameter(Mandatory=$false, HelpMessage='Enter a ControlUp Site Name' )]
     [ValidateNotNullOrEmpty()]
     [string] $Site ,
 
-    [Parameter(
-    	Mandatory=$false,
-    	HelpMessage='Create folders in batches rather than individually'
-	)]
-	[switch] $batchCreateFolders
+    [Parameter(Mandatory=$false, HelpMessage='Create folders in batches rather than individually')]
+	[switch] $batchCreateFolders ,
+
+    [Parameter(Mandatory=$false, HelpMessage='Force folder creation if number exceeds safe limit')]
+	[switch] $force
 ) 
 
 ## GRL this way allows script to be run with debug/verbose without changing script
@@ -422,7 +429,11 @@ if ($LogFile){
 }
 
 if ($Site){
-    $BuildCUTreeParams.Add("SiteId",$Site)
+    $BuildCUTreeParams.Add("SiteName",$Site)
+}
+
+if ($Force){
+    $BuildCUTreeParams.Add("Force",$true)
 }
 
 if ($batchCreateFolders){

@@ -21,7 +21,13 @@
     Specify a ControlUp Monitor Site to assign the objects.
 
 .PARAMETER Base
-    get this from the URL shown after manual logon to VMware cloud
+    Get this from the URL shown after manual logon to VMware Cloud
+
+.PARAMETER batchCreateFolders
+    Create folders in batches rather than sequentially
+
+.PARAMETER force
+    When the number of new folders to create is large, force the operation to continue otherwise it will abort before commencing
 
 .EXAMPLE
     "C:\CU Environment Sync Scripts\Horizon_Azure_Sync.ps1"  -folderPath "\Datacenter\Virtual Desktops\Horizon Cloud"  -logfile "C:\CU Environment Sync Scripts\HZ Azure Sync.log" -base "cloud-us-2"
@@ -39,6 +45,9 @@
     Guy Leech,              2020-12-24 - Verbose output for findpools result for troubleshooting missing machines
     Guy Leech,              2021-01-06 - Use findpools output to find any pools not already retrieved
     Wouter Kursten,         2021-01-21 - removed unused parameters and updated synopsis
+    Guy Leech,              2021-02-12 - Added -force for when large number of folders to add
+    Guy Leech,              2021-02-14 - Added prompting to create credential files if missing and able to prompt
+    
 .LINK
 
 .COMPONENT
@@ -57,42 +66,34 @@
 
 Param
 (
-    [Parameter(
-        Mandatory=$true,
-        HelpMessage='Enter a ControlUp subfolder to save your Horizon tree'
-    )]
+    [Parameter(Mandatory=$true, HelpMessage='Enter a ControlUp subfolder to save your Horizon tree' )]
     [ValidateNotNullOrEmpty()]
     [string] $folderPath,
 
-    [Parameter(
-        HelpMessage='Preview the changes'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(HelpMessage='Preview the changes')]
     [switch] $Preview,
 
-    [Parameter(
-        HelpMessage='Base URL used to logon to VMware Cloud'
-    )]
+    [Parameter(HelpMessage='Base URL used to logon to VMware Cloud')]
     [ValidateNotNullOrEmpty()]
     [string]$base = 'cloud-us-2' , ## get this from the URL shown after manual logon to VMware cloud
 
-    [Parameter(
-        HelpMessage='Execute removal operations. When combined with preview it will only display the proposed changes'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(HelpMessage='Execute removal operations. When combined with preview it will only display the proposed changes' )]
     [switch] $Delete,
 
-    [Parameter(
-        HelpMessage='Enter a path to generate a log file of the proposed changes'
-    )]
+    [Parameter(HelpMessage='Enter a path to generate a log file of the proposed changes')]
     [ValidateNotNullOrEmpty()]
     [string] $LogFile,
 
-   [Parameter(
-        HelpMessage='Enter a ControlUp Site'
-    )]
+    [Parameter(HelpMessage='Enter a ControlUp Site' )]
     [ValidateNotNullOrEmpty()]
-    [string] $Site
+    [string] $Site,
+
+    [Parameter(Mandatory=$false, HelpMessage='Create folders in batches rather than individually' )]
+	[switch] $batchCreateFolders ,
+
+    [Parameter(Mandatory=$false, HelpMessage='Force folder creation if number exceeds safe limit' )]
+	[switch] $force
+
 )
 
 ## GRL this way allows script to be run with debug/verbose without changing script
@@ -130,11 +131,49 @@ function Get-CUStoredCredential {
     [string]$strCUCredFile = Join-Path -Path "$strCUCredFolder" -ChildPath "$($env:USERNAME)_$($System)_Cred.xml"
     if( ! ( Test-Path -Path $strCUCredFile -ErrorAction SilentlyContinue ) )
     {
-        [string]$errorMessage = "Unable to find stored credential file `"$strCUCredFile`" - have you previously run the `"Create Credentials for Horizon Scripts`" script for user $env:username ?"
-        Write-CULog -Msg $errorMessage -ShowConsole -Type E
-        Throw $errorMessage
+        [string]$credentialsScript = [System.IO.Path]::Combine( $scriptPath , 'Store credentials.ps1' )
+        if( Test-Path -Path $credentialsScript -PathType Leaf -ErrorAction SilentlyContinue )
+        {
+            [array]$services = @()
+            $parentPid = $null
+            if( ( $parentPid = Get-CimInstance -ClassName win32_process -Filter "ProcessId = '$pid'" | Select-Object -ExpandProperty ParentProcessId ) -ne $null )
+            {
+                $services = @( Get-CimInstance -ClassName win32_service -Filter "ProcessId = '$parentPid'" )
+            }
+            else
+            {
+                Write-CULog -Msg "Failed to find parent process for pid $pid" -ShowConsole -Type E
+            }
+
+            if( ! $services -or ! $services.Count )
+            {
+                [string]$answer = 'no'
+                Try
+                {
+                    $answer = Read-Host -Prompt "Unable to find stored credential file for $system - would you like to create it now, usable only by user $env:username on $env:COMPUTERNAME ? "
+                }
+                Catch
+                {
+                    ## will throw an exception when not running interactively, eg via scheduled task
+                    [string]$message = "No credentials file `"$strCUCredFile`" but unable to prompt"
+                    Write-CULog -Msg $message -ShowConsole -Type E
+                    [System.Diagnostics.Debug]::WriteLine( $message )
+                }
+                if( $answer -and $answer -match '^y' )
+                {
+                    & $credentialsScript -credential $null -credentialType $system | Write-Host
+                }
+            }
+            else
+            {
+                [string]$message = "No credentials file `"$strCUCredFile`" but parent (pid $parentPid) is a service so won't prompt"
+                Write-CULog -Msg $message -ShowConsole -Type E
+                [System.Diagnostics.Debug]::WriteLine( $message )
+            }
+        }
     }
-    else
+    
+    if( Test-Path -Path $strCUCredFile -ErrorAction SilentlyContinue )
     {
         Try
         {
@@ -146,6 +185,12 @@ function Get-CUStoredCredential {
             Write-CULog -Msg $errorMessage -ShowConsole -Type E
             Throw $errorMessage
         }
+    }
+    else
+    {
+        [string]$errorMessage = "Unable to find stored credential file `"$strCUCredFile`" - have you previously run the `"Create Credentials for Horizon Scripts`" script for user $env:username ?"
+        Write-CULog -Msg $errorMessage -ShowConsole -Type E
+        Throw $errorMessage
     }
 }
 
@@ -359,14 +404,6 @@ class ControlUpObject{
         $this.Description = $description
         $this.DNSName = $DNSName
     }
-}
-
-# Get the content of the exception file and put it into an array
-if ($Exceptionsfile){
-    [array]$exceptionlist= get-content -Path $Exceptionsfile
-}
-else {
-    $exceptionlist=@()
 }
 
 ## Map VMware terms to CU
@@ -687,7 +724,15 @@ if ($LogFile){
 }
 
 if ($Site){
-    $BuildCUTreeParams.Add("SiteId",$Site)
+    $BuildCUTreeParams.Add("SiteName",$Site)
+}
+
+if ($batchCreateFolders){
+    $BuildCUTreeParams.Add("batchCreateFolders",$true)
+}
+
+if ($Force){
+    $BuildCUTreeParams.Add("Force",$true)
 }
 
 [int]$errorCount = Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams

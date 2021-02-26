@@ -18,7 +18,7 @@
     Tells the script to log the output to a text file. Can be used with -Preview to see the proposed changes.
 
 .PARAMETER Site
-    Specify a ControlUp Monitor Site to assign the objects.
+    Specify a ControlUp Monitor Site by name to assign the objects.
 
 .PARAMETER Brokers
     A list of brokers to contact for Delivery Groups and Computers to sync. Multiple brokers can be specified if seperated by commas.
@@ -53,7 +53,12 @@
                |                         |-Machine001
                |-Brokers -|
                           |-Broker001
-             
+
+.PARAMETER batchCreateFolders
+    Create folders in batches rather than sequentially
+
+.PARAMETER force
+    When the number of new folders to create is large, force the operation to continue otherwise it will abort before commencing
 
 .EXAMPLE
     . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local","ctxdc01.bottheory.local" -folderPath "CUSync\Citrix" -includeDeliveryGroup "EpicNorth","EpicSouth","EpicCentral","Cerner*" -excludeDeliveryGroup "CernerNorth" -addBrokersToControlUp -MatchEUCEnvTree
@@ -76,7 +81,7 @@
     Guy Leech,            2020-10-13 - Accommodate Build-CUTree returning error count
     Guy Leech,            2020-10-30 - Fixed bug where -Adminaddress not passed to Get-BrokerDesktopGroup
     Guy Leech,            2020-11-02 - Added -batchCreateFolders option to create folders in batches (faster) otherwise creates them one at a time
-
+    Guy Leech,            2021-02-12 - Added -force for when large number of folders to add
 .LINK
 
 .COMPONENT
@@ -95,97 +100,47 @@
 [CmdletBinding()]
 Param
 (
-    [Parameter(
-        Position=0, 
-        Mandatory=$true, 
-        HelpMessage='Enter a ControlUp subfolder to save your Citrix tree'
-    )]
+    [Parameter(Mandatory=$true, HelpMessage='Enter a ControlUp subfolder to save your Citrix tree' )]
     [ValidateNotNullOrEmpty()]
     [string] $folderPath,
 
-    [Parameter(
-        Position=1, 
-        Mandatory=$false, 
-        HelpMessage='Preview the changes'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(Mandatory=$false, HelpMessage='Preview the changes' )]
     [switch] $Preview,
 
-    [Parameter(
-        Position=2, 
-        Mandatory=$false, 
-        HelpMessage='Execute removal operations. When combined with preview it will only display the proposed changes'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(Mandatory=$false, HelpMessage='Execute removal operations. When combined with preview it will only display the proposed changes' )]
     [switch] $Delete,
 
-    [Parameter(
-        Position=3, 
-        Mandatory=$false, 
-        HelpMessage='Enter a path to generate a log file of the proposed changes'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(Mandatory=$false, HelpMessage='Enter a path to generate a log file of the proposed changes' )]
     [string] $LogFile,
 
-    [Parameter(
-        Position=4, 
-        Mandatory=$false, 
-        HelpMessage='Enter a ControlUp Site'
-    )]
+    [Parameter(Mandatory=$false, HelpMessage='Enter a ControlUp Site' )]
     [ValidateNotNullOrEmpty()]
     [string] $Site,
 
-    [Parameter(
-        Position=5,
-        Mandatory=$false, 
-        HelpMessage='Creates the ControlUp folder structure based on the EUC Environment tree'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(Mandatory=$false, HelpMessage='Creates the ControlUp folder structure based on the EUC Environment tree' )]
     [switch] $MatchEUCEnvTree,
 
-    [Parameter(
-        Position=6,
-        Mandatory=$true, 
-        HelpMessage='A list of Brokers to connect and pull data'
-    )]
+    [Parameter(Mandatory=$true,  HelpMessage='A list of Brokers to connect and pull data' )]
     [ValidateNotNullOrEmpty()]
     [array] $Brokers,
 
-    [Parameter(
-        Position=7,
-        Mandatory=$false, 
-        HelpMessage='A list of Delivery Groups to include.  Works with wildcards'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(Mandatory=$false, HelpMessage='A list of Delivery Groups to include.  Works with wildcards' )]
     [array] $includeDeliveryGroup,
 
-    [Parameter(
-        Position=8,
-        Mandatory=$false, 
-        HelpMessage='A list of Delivery Groups to exclude.  Works with wildcards. Exclusions supercede inclusions'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(Mandatory=$false, HelpMessage='A list of Delivery Groups to exclude.  Works with wildcards. Exclusions supercede inclusions' )]
     [array] $excludeDeliveryGroup,
 
-    [Parameter(
-        Position=9,
-        Mandatory=$false, 
-        HelpMessage='Adds the Citrix Brokers to the ControlUp tree'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(Mandatory=$false, HelpMessage='Adds the Citrix Brokers to the ControlUp tree' )]
     [switch] $addBrokersToControlUp ,
 
-    [Parameter(
-        Mandatory=$false, 
-        HelpMessage='Only adds Delivery Groups which are enabled'
-    )]
+    [Parameter(Mandatory=$false, HelpMessage='Only adds Delivery Groups which are enabled' )]
     [switch] $enabledOnly ,
 
-    [Parameter(
-    	Mandatory=$false,
-    	HelpMessage='Create folders in batches rather than individually'
-	)]
-	[switch] $batchCreateFolders
+    [Parameter(Mandatory=$false, HelpMessage='Create folders in batches rather than individually' )]
+	[switch] $batchCreateFolders ,
+
+    [Parameter(Mandatory=$false, HelpMessage='Force folder creation if number exceeds safe limit' )]
+	[switch] $force
 ) 
 
 ## GRL this way allows script to be run with debug/verbose without changing script
@@ -447,11 +402,15 @@ if ($LogFile){
 }
 
 if ($Site){
-    $BuildCUTreeParams.Add("SiteId",$Site)
+    $BuildCUTreeParams.Add("SiteName",$Site)
 }
 
 if ($batchCreateFolders){
     $BuildCUTreeParams.Add("batchCreateFolders",$true)
+}
+
+if ($Force){
+    $BuildCUTreeParams.Add("Force",$true)
 }
 
 [int]$errorCount = Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams
