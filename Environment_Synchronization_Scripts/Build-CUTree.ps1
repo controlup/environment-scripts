@@ -15,6 +15,8 @@
         @guyrleech 2020-10-30   Bug fixed where computers were not being deleted, fixed bug in dll version detection
         @guyrleech 2020-11-02   Workaround for bug where batch folder creation fails where folder name already exists at top level
         @guyrleech 2020-12-20   Reorganised help comment block to be get-help compatible for script and function
+        @guyrleech 2021-02-11   Change SiteId to SiteName and errors if does not exist. Added batch folder warning as can cause issues
+        @guyrleech 2021-02-12   Added delay between each folder add when a large number being added
 #>
 
 <#
@@ -110,8 +112,8 @@
         such a way that you should be able to copy-paste them into a powershell prompt that has the ControlUp Powershell modules loaded and they should
         be executable.  Use this for testing individual operations to validate it will work as you expect.
 
-    .PARAMETER SiteId
-        An optional parameter to specify which site you want the machine object assigned. By default, the site ID is "Default". Enter the name of the site
+    .PARAMETER SiteName
+        An optional parameter to specify which site you want the machine object assigned. By default, the site name is "Default". Enter the name of the site
         to assign the object
 
     .PARAMETER DebugCUMachineEnvironment
@@ -122,6 +124,19 @@
 
     .PARAMETER batchCreateFolders
         Create ControlUp folders in batches rather than one by one
+
+    .PARAMETER batchCountWarning
+    
+        When the number of new folders to add exceeds this number, either a warning will be produced and throttling introduced or the operation will be aborted if -force is not specified
+
+    .PARAMETER force
+    
+        When the number of new folders to add exceeds -batchCountWarning a warning will be produced and throttling introduced otherwise the operation will be aborted
+
+    .PARAMETER folderCreateDelaySeconds
+    
+        When the number of new folders to add exceeds -batchCountWarning, a delay of this number of seconds will be introduced between each folder creation when -force is specified.
+        The delay can also be set using the %CU_delay% environment variable
 
     .EXAMPLE
         Build-CUTree -ExternalTree $WVDEnvironment -CURootFolder "VDI_and_SBC\WVD" -Preview -Delete -PreviewOutputPath C:\temp\sync.log
@@ -143,63 +158,42 @@ function Build-CUTree {
     Param
     (
 
-	    [Parameter(
-    	    Position=1,
-    	    Mandatory=$true,
-    	    HelpMessage='Object to build tree within ControlUp'
-	    )]
+	    [Parameter(Mandatory=$true,HelpMessage='Object to build tree within ControlUp')]
 	    [PSObject] $ExternalTree,
 
-	    [Parameter(
-    	    Mandatory=$false,
-    	    HelpMessage='ControlUp root folder to sync'
-	    )]
+	    [Parameter(Mandatory=$false,HelpMessage='ControlUp root folder to sync')]
 	    [string] $CURootFolder,
 
- 	    [Parameter(
-    	    Mandatory=$false,
-    	    HelpMessage='Delete CU objects which are not in the external source'
-	    )]
+ 	    [Parameter(Mandatory=$false, HelpMessage='Delete CU objects which are not in the external source' )]
 	    [switch] $Delete,
 
-        [Parameter(
-            Mandatory=$false,
-            HelpMessage='Generate a report of the actions to be executed'
-        )]
+        [Parameter(Mandatory=$false, HelpMessage='Generate a report of the actions to be executed' )]
         [switch]$Preview,
 
-        [Parameter(
-    	    Mandatory=$false,
-    	    HelpMessage='Save a log file'
-	    )]
+        [Parameter(Mandatory=$false, HelpMessage='Save a log file' )]
 	    [string] $LogFile,
 
-        [Parameter(
-    	    Mandatory=$false,
-    	    HelpMessage='ControlUp Site Id to assign the machine object'
-	    )]
-	    [string] $SiteId,
+        [Parameter(Mandatory=$false, HelpMessage='ControlUp Site Name to assign the machine object to' )]
+	    [string] $SiteName,
 
-        [Parameter(
-    	    Mandatory=$false,
-    	    HelpMessage='Debug CU Machine Environment Objects'
-	    )]
+        [Parameter(Mandatory=$false, HelpMessage='Debug CU Machine Environment Objects' )]
 	    [Object] $DebugCUMachineEnvironment,
 
-        [Parameter(
-    	    Mandatory=$false,
-    	    HelpMessage='Debug CU Folder Environment Object'
-	    )]
+        [Parameter(Mandatory=$false, HelpMessage='Debug CU Folder Environment Object' )]
 	    [switch] $DebugCUFolderEnvironment ,
 
-        [Parameter(
-    	    Mandatory=$false,
-    	    HelpMessage='Create folders in batches rather than individually'
-	    )]
-	    [switch] $batchCreateFolders
-    )
-    #endregion
+        [Parameter(Mandatory=$false, HelpMessage='Create folders in batches rather than individually' )]
+	    [switch] $batchCreateFolders ,
 
+        [Parameter(Mandatory=$false, HelpMessage='Number of folders to be created that generates warning and requires -force' )]
+        [int] $batchCountWarning = 100 ,
+        
+        [Parameter(Mandatory=$false, HelpMessage='Force creation of folders if -batchCountWarning size exceeded' )]
+        [switch] $force ,
+
+        [Parameter(Mandatory=$false, HelpMessage='Delay between each folder creation when count exceeds -batchCountWarning' )]
+        [double] $folderCreateDelaySeconds = 0.5
+    )
 
     Begin {
 
@@ -365,6 +359,11 @@ function Build-CUTree {
         } else {
             $Global:LogFile = $false
         }
+
+        if( ! $PSBoundParameters[ 'folderCreateDelaySeconds' ] -and $env:CU_delay )
+        {
+            $folderCreateDelaySeconds = $env:CU_delay
+        }
     }
 
     Process {
@@ -419,14 +418,23 @@ function Build-CUTree {
         }
         #endregion
 
-        #region validate SiteId parameter
+        #region validate SiteName parameter
         [hashtable] $SiteIdParam = @{}
-        if ($PSBoundParameters.ContainsKey("SiteId")) {
-            Write-CULog -Msg "Assigning resources to specific site: $SiteId" -ShowConsole
-            $Sites = Get-CUSites
-            $SiteIdGUID = ($Sites.Where{$_.Name -eq $SiteId}).Id
-            Write-CULog -Msg "SiteId GUID: $SiteIdGUID" -ShowConsole -SubMsg
-            $SiteIdParam.Add( 'SiteId' , $SiteIdGUID )
+        [string]$SiteIdGUID = $null
+        if ($PSBoundParameters.ContainsKey("SiteName")) {
+            Write-CULog -Msg "Assigning resources to specific site: $SiteName" -ShowConsole
+            
+            [array]$cusites = @( Get-CUSites )
+            if( ! ( $SiteIdGUID = $cusites | Where-Object { $_.Name -eq $SiteName } | Select-Object -ExpandProperty Id ) -or ( $SiteIdGUID -is [array] -and $SiteIdGUID.Count -gt 1 ) )
+            {
+                Write-CULog -Msg "No unique ControlUp site `"$SiteName`" found (the $($cusites.Count) sites are: $(($cusites | Select-Object -ExpandProperty Name) -join ' , ' ))" -ShowConsole -Type E
+                break
+            }
+            else
+            {
+                Write-CULog -Msg "SiteId GUID: $SiteIdGUID" -ShowConsole -SubMsg
+                $SiteIdParam.Add( 'SiteId' , $SiteIdGUID )
+            }
         }
 
         #region Retrieve ControlUp folder structure
@@ -539,7 +547,9 @@ function Build-CUTree {
         $FoldersToAddCount  = 0
 
         #we'll output the statistics at the end -- also helps with debugging
-        $FoldersToAdd       = New-Object System.Collections.Generic.List[PSObject]
+        $FoldersToAdd          = New-Object System.Collections.Generic.List[PSObject]
+        ## There can be problems when folders are added in large numbers so we will see how many new ones are being requested so we can control if necessary
+        $FoldersToAddBatchless = New-Object System.Collections.Generic.List[PSObject]
         [hashtable]$newFoldersAdded = @{} ## keep track of what we've issued btch commands to create so we don't duplicate
 
         foreach ($ExtFolderPath in $ExtFolderPaths.FolderPath) {
@@ -561,15 +571,11 @@ function Build-CUTree {
                             }
                             Add-CUFolder -Name $pathElement -ParentPath $pathSoFar -Batch $FoldersToAddBatch
                         }
-                        else ## create folders immediately
+                        else ## create folders immediately rather than in batch but first make a list so we can see how many new ones are needed since some may exist already
                         {
                             if( -not $Preview )
                             {
-                                Write-Verbose -Message "Creating folder `"$pathElement`" in `"$pathSoFar`""
-                                if( ! ( $folderCreated = Add-CUFolder -Name $pathElement -ParentPath $pathSoFar ) -or $folderCreated -notmatch "^Folder '$pathElement' was added successfully$" )
-                                {
-                                    Write-CULog -Msg "Failed to create folder `"$pathElement`" in `"$pathSoFar`" - $folderCreated" -ShowConsole -Type E
-                                }
+                                $FoldersToAddBatchless.Add( [pscustomobject]@{ PathElement = $pathElement ; PathSoFar = $pathSoFar } )
                             }
                         }
                         $FoldersToAdd.Add("Add-CUFolder -Name `"$pathElement`" -ParentPath `"$pathSoFar`"")
@@ -580,6 +586,41 @@ function Build-CUTree {
                 }
             }
         }
+
+        if( $FoldersToAddBatchless -and $FoldersToAddBatchless.Count )
+        {
+            [int]$folderDelayMilliseconds = 0
+
+            if( $FoldersToAddBatchless.Count -ge $batchCountWarning )
+            {
+                [string]$logText = "$($FoldersToAddBatchless.Count) folders to add which could cause performance issues"
+
+                if( $force )
+                {
+                    Write-CULog -Msg $logText -ShowConsole -Type W
+                    $folderDelayMilliseconds = $folderCreateDelaySeconds * 1000
+                }
+                else
+                {
+                    Write-CULog -Msg "$logText, aborting - use -force to override" -ShowConsole -Type E
+                    break
+                }
+            }
+            ForEach( $item in $FoldersToAddBatchless )
+            {
+                Write-Verbose -Message "Creating folder `"$($item.pathElement)`" in `"$($item.pathSoFar)`""
+                if( ! ( $folderCreated = Add-CUFolder -Name $item.pathElement -ParentPath $item.pathSoFar ) -or $folderCreated -notmatch "^Folder '$($item.pathElement)' was added successfully$" )
+                {
+                    Write-CULog -Msg "Failed to create folder `"$($item.pathElement)`" in `"$($item.pathSoFar)`" - $folderCreated" -ShowConsole -Type E
+                }
+                ## to help avoid central CU service becoming overwhelmed
+                if( $folderDelayMilliseconds -gt 0 )
+                {
+                    Start-Sleep -Milliseconds $folderDelayMilliseconds
+                }
+            }
+        }
+
         if ($FoldersToAddCount -le $maxFolderBatchSize -and $FoldersToAddCount -ne 0) { $FolderAddBatches.Add($FoldersToAddBatch) }
 
         # Build computers batch
@@ -630,7 +671,7 @@ function Build-CUTree {
                          Write-CULog "Error while attempting to run Add-CUComputer" -ShowConsole -Type E
                          Write-CULog "$($Error[0])"  -ShowConsole -Type E
                 }
-                if ($PSBoundParameters.ContainsKey("SiteId")) {
+                if ( ! [string]::IsNullOrEmpty( $SiteIdGUID )) {
                     $MachinesToAdd.Add("Add-CUComputer -Domain $($ExtComputer.Domain) -Name $($ExtComputer.Name) -FolderPath `"$($ExtComputer.FolderPath)`" -SiteId $SiteIdGUID")
                 } else {
                     $MachinesToAdd.Add("Add-CUComputer -Domain $($ExtComputer.Domain) -Name $($ExtComputer.Name) -FolderPath `"$($ExtComputer.FolderPath)`"")
