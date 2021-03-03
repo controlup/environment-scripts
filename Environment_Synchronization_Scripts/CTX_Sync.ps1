@@ -216,7 +216,7 @@ if ($brokers.count -eq 1 -and $brokers[0].IndexOf(',') -ge 0) {
 
 foreach ($adminAddr in $brokers) {
     $brokerParameters.AdminAddress = $adminAddr
-    $CTXSite = Get-BrokerSite -AdminAddress $adminAddr -MaxRecordCount 10000
+    $CTXSite = Get-BrokerSite -AdminAddress $adminAddr
     $CTXSites.Add($CTXSite)
     Write-Verbose -Message "Querying $adminAddr for Delivery Groups"
     #Get list of Delivery Groups
