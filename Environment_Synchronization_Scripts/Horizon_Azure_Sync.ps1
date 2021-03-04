@@ -30,15 +30,7 @@
     When the number of new folders to create is large, force the operation to continue otherwise it will abort before commencing
 
 .EXAMPLE
-    . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local","ctxdc01.bottheory.local" -folderPath "CUSync\Citrix" -includeDeliveryGroup "EpicNorth","EpicSouth","EpicCentral","Cerner*" -excludeDeliveryGroup "CernerNorth" -addBrokersToControlUp -MatchEUCEnvTree
-        Contacts the brokers ddc1.bottheory.local and ctxdc01.bottheory.local, it will save the objects to the ControlUp folder
-        "CUSync\Citrix", only include specific Delivery Groups including all Delivery Groups that start wtih Cerner and exclude
-        the Delivery Group "CernerNorth", adds the broker machines to ControlUp, have the script match the same structure as
-        the ControlUp EUC Environment.
-
-.EXAMPLE
-    . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local" -folderPath "CUSync"
-        Contacts the brokers ddc1.bottheory.local and adds all Delivery Groups and their machines to ControlUp under the folder "CUSync"
+    "C:\CU Environment Sync Scripts\Horizon_Azure_Sync.ps1"  -folderPath "\Datacenter\Virtual Desktops\Horizon Cloud"  -logfile "C:\CU Environment Sync Scripts\HZ Azure Sync.log" -base "cloud-us-2"
 
 .CONTEXT
     VMware Horizon
@@ -55,19 +47,19 @@
     Wouter Kursten,         2021-01-21 - removed unused parameters and updated synopsis
     Guy Leech,              2021-02-12 - Added -force for when large number of folders to add
     Guy Leech,              2021-02-14 - Added prompting to create credential files if missing and able to prompt
+    
 .LINK
 
 .COMPONENT
 
 .NOTES
-    Requires rights to read Citrix environment.
+    Requires rights to read Horizon on Azure environment.
 
     Version:        0.1
-    Author:         Wouter Kursten
-    Creation Date:  2020-08-06
-    Updated:        2020-08-06
-                    Changed ...
-    Purpose:        Created for VMware Horizon Sync
+    Author:         Guy Leech
+    Creation Date:  2020-09-23
+
+    Purpose:        Created for VMware Horizon on Azure Sync
 #>
 
 [CmdletBinding()]
@@ -101,6 +93,7 @@ Param
 
     [Parameter(Mandatory=$false, HelpMessage='Force folder creation if number exceeds safe limit' )]
 	[switch] $force
+
 )
 
 ## GRL this way allows script to be run with debug/verbose without changing script
