@@ -18,10 +18,18 @@
     Tells the script to log the output to a text file. Can be used with -Preview to see the proposed changes.
 
 .PARAMETER Site
-    Specify a ControlUp Monitor Site to assign the objects.
+    Specify a ControlUp Monitor Site by name to assign the objects.
 
-.PARAMETER DNSName
-    Use an alternate DNS suffix instead of the default domain suffix.
+.PARAMETER UseMappingFile
+    Specify a mapping file to associate machine catalogs with specific properties you want to see in ControlUp. The intended use
+    is when you want machines to have a specific site assigned based on which machine catalog the device is with, or to modify
+    properties like the domain suffix. The mapping file will be a csv with the following format:
+
+    ====================================== MappingFile.csv ======================================
+    MachineCatalog,Domain,DNSName,CUSite
+    Windows 10 Test,ACME.local,tst.acme.local,FloridaOffice
+    Windows 10 Prod,ACME.local,prd.acme.local,OrlandoOffice
+    ====================================== MappingFile.csv ======================================
 
 .PARAMETER Brokers
     A list of brokers to contact for Delivery Groups and Computers to sync. Multiple brokers can be specified if seperated by commas.
@@ -56,7 +64,12 @@
                |                         |-Machine001
                |-Brokers -|
                           |-Broker001
-             
+
+.PARAMETER batchCreateFolders
+    Create folders in batches rather than sequentially
+
+.PARAMETER force
+    When the number of new folders to create is large, force the operation to continue otherwise it will abort before commencing
 
 .EXAMPLE
     . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local","ctxdc01.bottheory.local" -folderPath "CUSync\Citrix" -includeDeliveryGroup "EpicNorth","EpicSouth","EpicCentral","Cerner*" -excludeDeliveryGroup "CernerNorth" -addBrokersToControlUp -MatchEUCEnvTree
@@ -69,11 +82,6 @@
     . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local" -folderPath "CUSync"
         Contacts the brokers ddc1.bottheory.local and adds all Delivery Groups and their machines to ControlUp under the folder "CUSync"
 
-.EXAMPLE
-    . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local" -folderPath "CUSync" -DNSName ext.ad.bottheory.local
-        Contacts the brokers ddc1.bottheory.local and adds all Delivery Groups and their machines to ControlUp under the folder "CUSync", but 
-        the machines are added as $name.ext.ad.bottheory.local
-
 .CONTEXT
     Citrix
 
@@ -84,7 +92,8 @@
     Guy Leech,            2020-10-13 - Accommodate Build-CUTree returning error count
     Guy Leech,            2020-10-30 - Fixed bug where -Adminaddress not passed to Get-BrokerDesktopGroup
     Guy Leech,            2020-11-02 - Added -batchCreateFolders option to create folders in batches (faster) otherwise creates them one at a time
-
+    Guy Leech,            2021-02-12 - Added -force for when large number of folders to add
+    Trentent Tye,         2021-02-26 - Added -useMappingFile feature
 .LINK
 
 .COMPONENT
@@ -92,10 +101,10 @@
 .NOTES
     Requires rights to read Citrix environment.
 
-    Version:        0.1
+    Version:        0.2
     Author:         Trentent Tye
     Creation Date:  2020-08-06
-    Updated:        2020-08-06
+    Updated:        2021-02-26
                     Changed ...
     Purpose:        Created for Citrix Sync
 #>
@@ -103,103 +112,50 @@
 [CmdletBinding()]
 Param
 (
-    [Parameter(
-        Position=0, 
-        Mandatory=$true, 
-        HelpMessage='Enter a ControlUp subfolder to save your Citrix tree'
-    )]
+    [Parameter(Mandatory=$true, HelpMessage='Enter a ControlUp subfolder to save your Citrix tree' )]
     [ValidateNotNullOrEmpty()]
     [string] $folderPath,
 
-    [Parameter(
-        Position=1, 
-        Mandatory=$false, 
-        HelpMessage='Preview the changes'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(Mandatory=$false, HelpMessage='Preview the changes' )]
     [switch] $Preview,
 
-    [Parameter(
-        Position=2, 
-        Mandatory=$false, 
-        HelpMessage='Execute removal operations. When combined with preview it will only display the proposed changes'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(Mandatory=$false, HelpMessage='Execute removal operations. When combined with preview it will only display the proposed changes' )]
     [switch] $Delete,
 
-    [Parameter(
-        Position=3, 
-        Mandatory=$false, 
-        HelpMessage='Enter a path to generate a log file of the proposed changes'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(Mandatory=$false, HelpMessage='Enter a path to generate a log file of the proposed changes' )]
     [string] $LogFile,
 
-    [Parameter(
-        Position=4, 
-        Mandatory=$false, 
-        HelpMessage='Enter a ControlUp Site'
-    )]
+    [Parameter(Mandatory=$false, HelpMessage='Enter a ControlUp Site' )]
     [ValidateNotNullOrEmpty()]
     [string] $Site,
 
-    [Parameter(
-        Position=5,
-        Mandatory=$false, 
-        HelpMessage='Creates the ControlUp folder structure based on the EUC Environment tree'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(Mandatory=$false, HelpMessage='Creates the ControlUp folder structure based on the EUC Environment tree' )]
     [switch] $MatchEUCEnvTree,
 
-    [Parameter(
-        Position=6,
-        Mandatory=$true, 
-        HelpMessage='A list of Brokers to connect and pull data'
-    )]
+    [Parameter(Mandatory=$true,  HelpMessage='A list of Brokers to connect and pull data' )]
     [ValidateNotNullOrEmpty()]
     [array] $Brokers,
 
-    [Parameter(
-        Position=7,
-        Mandatory=$false, 
-        HelpMessage='A list of Delivery Groups to include.  Works with wildcards'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(Mandatory=$false, HelpMessage='A list of Delivery Groups to include.  Works with wildcards' )]
     [array] $includeDeliveryGroup,
 
-    [Parameter(
-        Position=8,
-        Mandatory=$false, 
-        HelpMessage='A list of Delivery Groups to exclude.  Works with wildcards. Exclusions supercede inclusions'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(Mandatory=$false, HelpMessage='A list of Delivery Groups to exclude.  Works with wildcards. Exclusions supercede inclusions' )]
     [array] $excludeDeliveryGroup,
 
-    [Parameter(
-        Position=9,
-        Mandatory=$false, 
-        HelpMessage='Adds the Citrix Brokers to the ControlUp tree'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(Mandatory=$false, HelpMessage='Adds the Citrix Brokers to the ControlUp tree' )]
     [switch] $addBrokersToControlUp ,
 
-    [Parameter(
-        Mandatory=$false, 
-        HelpMessage='Only adds Delivery Groups which are enabled'
-    )]
+    [Parameter(Mandatory=$false, HelpMessage='Only adds Delivery Groups which are enabled' )]
     [switch] $enabledOnly ,
 
-    [Parameter(
-    	Mandatory=$false,
-    	HelpMessage='Create folders in batches rather than individually'
-	)]
-	[switch] $batchCreateFolders,
+    [Parameter(Mandatory=$false, HelpMessage='Enter a path to the mapping file' )]
+    [string] $UseMappingFile,
 
-    [Parameter(
-    	Mandatory=$false,
-    	HelpMessage='Use an alternate DNS suffix instead of the default suffix'
-	)]
-	[string] $DNSName
+    [Parameter(Mandatory=$false, HelpMessage='Create folders in batches rather than individually' )]
+	[switch] $batchCreateFolders ,
+
+    [Parameter(Mandatory=$false, HelpMessage='Force folder creation if number exceeds safe limit' )]
+	[switch] $force
 ) 
 
 ## GRL this way allows script to be run with debug/verbose without changing script
@@ -226,13 +182,15 @@ class ControlUpObject{
     [string]$Domain
     [string]$Description
     [string]$DNSName
-        ControlUpObject ([String]$Name,[string]$folderPath,[string]$type,[string]$domain,[string]$description,[string]$DNSName) {
+    [string]$CUSite
+        ControlUpObject ([String]$Name,[string]$folderPath,[string]$type,[string]$domain,[string]$description,[string]$DNSName,[string]$CUSite) {
         $this.Name = $Name
         $this.FolderPath = $folderPath
         $this.Type = $type
         $this.Domain = $domain
         $this.Description = $description
         $this.DNSName = $DNSName
+        $this.CUSite = $CUSite
     }
 }
 
@@ -371,28 +329,57 @@ Write-Verbose -Message "Total Number of Delivery Groups after filtering for excl
 Write-Host "Adding Delivery Groups to ControlUp Environmental Object"
 $ControlUpEnvironmentObject = New-Object System.Collections.Generic.List[PSObject]
 foreach ($DeliveryGroup in $DeliveryGroups) {
-    if( $newObject = [ControlUpObject]::new($($DeliveryGroup.Name) ,"$($DeliveryGroup.Name)","Folder","","$($DeliveryGroup.site)-DeliveryGroup",""))
+    if( $newObject = [ControlUpObject]::new($($DeliveryGroup.Name) ,"$($DeliveryGroup.Name)","Folder","","$($DeliveryGroup.site)-DeliveryGroup","",""))
     {
         $ControlUpEnvironmentObject.Add( $newObject )
     }
 }
 
+$customMapping = $false
+if ($useMappingFile -ne $null) {
+    Write-Host "A mapping file was specified." -ForegroundColor White
+    $customMapping = import-csv $useMappingFile
+    Write-Verbose "Custom Mapping File:"
+    Write-Verbose "$($CustomMapping | Out-String)"
+}
+
+
+
 #Add machines from the delivery group to the environmental object
 foreach ($DeliveryGroup in $DeliveryGroups) {
     
-    $CTXMachines = Get-BrokerMachine -DesktopGroupName $DeliveryGroup.Name -AdminAddress $DeliveryGroup.Broker
+    $CTXMachines = Get-BrokerMachine -DesktopGroupName $DeliveryGroup.Name -AdminAddress $DeliveryGroup.Broker -MaxRecordCount 10000
+    #TT TESTING
+    #$CTXMachines = Import-Clixml "C:\Swinst\ControlUp\Kroger\Individual DeliveryGroups\$($DeliveryGroup.name).xml"
+    #TT TESTING
     foreach ($Machine in $CTXMachines) {
         if ($Machine.MachineName -like "S-1-5*") {
             Write-Host "Detected a machine with a SID for a name. These cannot be added to ControlUp. Skipping: $($DeliveryGroup.Name) - $($Machine.machineName)" -ForegroundColor Yellow
         } else {
-            if ([string]::IsNullOrEmpty($machine.DNSName)) {
-                $DNSName = $null
-            } else {
-                $DNSName = $machine.DNSName
-            }
-            $Domain = $Machine.MachineName.split("\")[0]
             $Name =$Machine.MachineName.split("\")[1]
-            if( $newObject = [ControlUpObject]::new( $Name , $DeliveryGroup.Name , "Computer" , $Domain , "$($DeliveryGroup.site)-Machine" , $DNSName ) )
+            Write-Debug "Evaluating $name"
+            if ($customMapping.machinecatalog.Contains("$($Machine.CatalogName)")) { #TT going to remap properties
+            Write-Verbose "Remapping Machine: $Name"
+                $CustomProperties = $customMapping | Where {$_.MachineCatalog -match "$($Machine.CatalogName)"}
+                $Domain = $CustomProperties.Domain
+                $DNSName = "$($Machine.MachineName.split("\")[1]).$($CustomProperties.DNSName)"
+                $CUSite = $CustomProperties.CUSite
+
+            } else { #TT if we don't find any defined custom properties then we'll just use the properties of the object
+                if ([string]::IsNullOrEmpty($machine.DNSName)) {
+                    $DNSName = $null
+                } else {
+                    $DNSName = $machine.DNSName
+                }
+                $Domain = $Machine.MachineName.split("\")[0]
+                $Description = "$($DeliveryGroup.site)-Machine"
+                if ($Site) {
+                    $CUSite = $Site
+                } else {
+                    $CUSite = "Default"
+                }
+            }
+            if( $newObject = [ControlUpObject]::new( $Name , $DeliveryGroup.Name , "Computer" , $Domain , $Description , $DNSName , $CUSite ) )
             {
                 $ControlUpEnvironmentObject.Add( $newObject )
             }
@@ -403,7 +390,7 @@ foreach ($DeliveryGroup in $DeliveryGroups) {
 #Add Brokers to ControlUpEnvironmentalObject
 if ($addBrokersToControlUp) {
     if (-not($MatchEUCEnvTree)) {  # MatchEUCEnvTree will add environment specific brokers folders
-        if( $newObject = [ControlUpObject]::new( 'Brokers' ,'Brokers' , 'Folder' , '' , 'Brokers' , '' ))
+        if( $newObject = [ControlUpObject]::new( 'Brokers' ,'Brokers' , 'Folder' , '' , 'Brokers' , '', '' ))
         {
             $ControlUpEnvironmentObject.Add( $newObject )
         }
@@ -416,7 +403,7 @@ if ($addBrokersToControlUp) {
         }
         $Domain = $Machine.MachineName.split("\")[0]
         $Name =$Machine.MachineName.split("\")[1]
-        if( $newObject = [ControlUpObject]::new( $Name , 'Brokers' , 'Computer' , $Domain , "$($Machine.site)-BrokerMachine" , $DNSName ))
+        if( $newObject = [ControlUpObject]::new( $Name , 'Brokers' , 'Computer' , $Domain , "$($Machine.site)-BrokerMachine" , $DNSName, '' ))
         {
             $ControlUpEnvironmentObject.Add( $newObject )
         }
@@ -434,7 +421,7 @@ if ($MatchEUCEnvTree) {
     }
     if ($addBrokersToControlUp) {
         foreach ($CtxSite in $($CTXSites | Sort-Object -Unique)) {
-            if( $newObject = [ControlUpObject]::new("Brokers" ,"$($CTXSite.Name)\Brokers","Folder","","Brokers",""))
+            if( $newObject = [ControlUpObject]::new("Brokers" ,"$($CTXSite.Name)\Brokers","Folder","","Brokers","",""))
             {
                 $ControlUpEnvironmentObject.Add( $newObject )
             }
@@ -461,16 +448,17 @@ if ($LogFile){
 }
 
 if ($Site){
-    $BuildCUTreeParams.Add("SiteId",$Site)
+    $BuildCUTreeParams.Add("SiteName",$Site)
 }
 
 if ($batchCreateFolders){
     $BuildCUTreeParams.Add("batchCreateFolders",$true)
 }
 
-if ($DNSName){
-    $BuildCUTreeParams.Add("DNSName",$DNSName)
+if ($Force){
+    $BuildCUTreeParams.Add("Force",$true)
 }
+
 
 [int]$errorCount = Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams
 
