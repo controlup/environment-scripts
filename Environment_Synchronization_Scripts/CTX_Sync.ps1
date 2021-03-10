@@ -349,9 +349,6 @@ if ($useMappingFile -ne $null) {
 foreach ($DeliveryGroup in $DeliveryGroups) {
     
     $CTXMachines = Get-BrokerMachine -DesktopGroupName $DeliveryGroup.Name -AdminAddress $DeliveryGroup.Broker -MaxRecordCount 10000
-    #TT TESTING
-    #$CTXMachines = Import-Clixml "C:\Swinst\ControlUp\Kroger\Individual DeliveryGroups\$($DeliveryGroup.name).xml"
-    #TT TESTING
     foreach ($Machine in $CTXMachines) {
         if ($Machine.MachineName -like "S-1-5*") {
             Write-Host "Detected a machine with a SID for a name. These cannot be added to ControlUp. Skipping: $($DeliveryGroup.Name) - $($Machine.machineName)" -ForegroundColor Yellow
