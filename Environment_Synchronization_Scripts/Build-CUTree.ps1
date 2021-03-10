@@ -1,3 +1,22 @@
+
+<#
+    .SYNOPSIS
+        Provides the function Build-CUTree which creates/updates a ControlUp folder structure with an external source (Active Directory, Citrix, Horizon, WVD)
+
+    .DESCRIPTION
+        See the help for Build-CUTree for usage detail once the script has been dot sourced
+
+    .NOTES
+    
+    MODIFICATION_HISTORY
+
+        @guyrleech 2020-10-13   Build-CUTree returns error count
+        @guyrleech 2020-10-26   Bug fixed when deleting - path repeated organization name so never matched items to delete
+        @guyrleech 2020-10-30   Bug fixed where computers were not being deleted, fixed bug in dll version detection
+        @guyrleech 2020-11-02   Workaround for bug where batch folder creation fails where folder name already exists at top level
+        @guyrleech 2020-12-20   Reorganised help comment block to be get-help compatible for script and function
+#>
+
 <#
     .SYNOPSIS
 	    Synchronizes ControlUp folder structure with an external source (Active Directory, Citrix, Horizon, WVD)
@@ -26,7 +45,7 @@
         will be required to be stored with the user account/profile specified.  Please see the external source script you wish to you for further
         documentation.
 
-    .PARAMETER ExternalTree <Object>
+    .PARAMETER ExternalTree
         An object that represents the logical formation of your external object.
         The object should in this format:
 
@@ -43,20 +62,19 @@
                 WVDSH-0                Pay-As-You-Go Dev-Test\WVDHP         Computer AcmeOnAzure.onmicrosoft.com WVD SessionHost
                 WVDSH-1                Pay-As-You-Go Dev-Test\WVDHP         Computer AcmeOnAzure.onmicrosoft.com WVD SessionHost
 
-    .PARAMETER CURootFolder <string>
+    .PARAMETER CURootFolder
         The folder in the ControlUp console that will be the root for the ExternalTree. Do NOT specify the organization name in this path, just the folder path
         underneath. For instance, in ControlUp if I right-click the folder I want to use as my root, and select "Properties" the "path:" will say something like:
         "a.c.m.e.\vdi_and_sbc\wvd".  In this example, "a.c.m.e." is the organization name so ignore it and just enter the folders underneath, which in this
         example is "vdi_and_sbc\wvd".
 
-    .PARAMETER Delete <Switch>
+    .PARAMETER Delete
         Enables removal of excess objects in the sync directory. If a machine or folder object is found in the ControlUp path but not in the ExternalTree object
         the object will be marked for removal. If you do not use this parameter than only Add or Move operations will occur.
 
-    .PARAMETER Preview <switch>
+    .PARAMETER Preview
         Generates a preview showing the actions this script wants to take. If more than 25 operations is going to be executed the script will just
         return the number of operations. To see the individual operations use the PreviewOutputPath parameter. See that paramater help for more information.
-        The Preview parameter will output do the operation calculation and return the expected operations as in this sample:
             + CU Computers Count: 101
             + Organization Name: a.c.m.e.
             + Target Folder Paths:
@@ -87,17 +105,23 @@
                     > Executing Computer Object Adds. Batch 1/1
                     > Execution Time: PREVIEW MODE
 
-    .PARAMETER LogFile <path to log file>
+    .PARAMETER LogFile
         Specifies that all output will be saved to a log file. Individual operations will also be saved to the log file. The operations are saved in
         such a way that you should be able to copy-paste them into a powershell prompt that has the ControlUp Powershell modules loaded and they should
         be executable.  Use this for testing individual operations to validate it will work as you expect.
 
-    .PARAMETER SiteId <string>
+    .PARAMETER SiteId
         An optional parameter to specify which site you want the machine object assigned. By default, the site ID is "Default". Enter the name of the site
         to assign the object
 
-    .PARAMETER DNSName <string>
-        An optional parameter to use an alternate DNS suffix instead of the default suffix
+    .PARAMETER DebugCUMachineEnvironment
+        CONTROLUP INTERNAL USE ONLY
+
+    .PARAMETER DebugCUFolderEnvironment
+        CONTROLUP INTERNAL USE ONLY
+
+    .PARAMETER batchCreateFolders
+        Create ControlUp folders in batches rather than one by one
 
     .EXAMPLE
         Build-CUTree -ExternalTree $WVDEnvironment -CURootFolder "VDI_and_SBC\WVD" -Preview -Delete -PreviewOutputPath C:\temp\sync.log
@@ -107,12 +131,6 @@
         Build-CUTree -ExternalTree $WVDEnvironment -CURootFolder "VDI_and_SBC\WVD" -Delete
             Executes a sync of the $WVDEnvironment object to the ControlUp folder "VDI_and_SBC\WVD" with object removal enabled.
 
-    .CONTEXT
-    .MODIFICATION_HISTORY
-    .LINK
-        https://www.controlup.com
-
-    .COMPONENT
     .NOTES
 	    Runs on a ControlUp Monitor computer
 	    Connects to an external source, retrieves the folder structure to synchronize
@@ -120,8 +138,6 @@
 	    Moves folders and computers which exist in locations that differ from the external source
 	    Optionally, removes folders and computers which do not exist in the external source
 #>
-
-#region Bind input parameters
 function Build-CUTree {
     [CmdletBinding()]
     Param
@@ -174,18 +190,24 @@ function Build-CUTree {
     	    Mandatory=$false,
     	    HelpMessage='Debug CU Folder Environment Object'
 	    )]
-	    [switch] $DebugCUFolderEnvironment
+	    [switch] $DebugCUFolderEnvironment ,
 
+        [Parameter(
+    	    Mandatory=$false,
+    	    HelpMessage='Create folders in batches rather than individually'
+	    )]
+	    [switch] $batchCreateFolders
     )
     #endregion
 
 
     Begin {
 
-    #This variable sets the maximum computer batch size to apply the changes in ControlUp. It is not recommended making it bigger than 1000
-    $maxBatchSize = 1000
-    #This variable sets the maximum batch size to apply the changes in ControlUp. It is not recommended making it bigger than 100
-    $maxFolderBatchSize = 100
+        #This variable sets the maximum computer batch size to apply the changes in ControlUp. It is not recommended making it bigger than 1000
+        $maxBatchSize = 1000
+        #This variable sets the maximum batch size to apply the changes in ControlUp. It is not recommended making it bigger than 100
+        $maxFolderBatchSize = 100
+        [int]$errorCount = 0
 
         function Write-CULog {
             <#
@@ -273,31 +295,51 @@ function Build-CUTree {
 	            [Parameter(Mandatory = $True)][Object]$BatchObject,
 	            [Parameter(Mandatory = $True)][string]$Message
             )
-            $batchCount = 1
+            [int]$returnCode = 0
+            [int]$batchCount = 0
             foreach ($batch in $BatchObject) {
-                Write-CULog -Msg "$Message. Batch $batchCount/$($BatchObject.count)" -ShowConsole -Color Red -SubMsg
+                $batchCount++
+                Write-CULog -Msg "$Message. Batch $batchCount/$($BatchObject.count)" -ShowConsole -Color DarkYellow -SubMsg
                 if (-not($preview)) {
-                    $PublishTime = Measure-Command { Publish-CUUpdates $batch }
-                    Write-CULog -Msg "Execution Time: $($PublishTime.TotalSeconds)" -ShowConsole -Color Green -SubMsg
+                    [datetime]$timeBefore = [datetime]::Now
+                    $result = Publish-CUUpdates -Batch $batch 
+                    [datetime]$timeAfter = [datetime]::Now
+                    [array]$results = @( Show-CUBatchResult -Batch $batch )
+                    [array]$failures = @( $results.Where( { $_.IsSuccess -eq $false } )) ## -and $_.ErrorDescription -notmatch 'Folder with the same name already exists' } ) )
+
+                    Write-CULog -Msg "Execution Time: $(($timeAfter - $timeBefore).TotalSeconds) seconds" -ShowConsole -Color Green -SubMsg
+                    Write-CULog -Msg "Result: $result" -ShowConsole -Color Green -SubMsg
+                    Write-CULog -Msg "Failures: $($failures.Count) / $($results.Count)" -ShowConsole -Color Green -SubMsg
+
+                    if( $failures -and $failures.Count -gt 0 ) {
+                        $returnCode += $failures.Count
+                        ForEach( $failure in $failures ) {
+                            Write-CULog -Msg "Action $($failure.ActionName) on `"$($failure.Subject)`" gave error $($failure.ErrorDescription) ($($failure.ErrorCode))" -ShowConsole -Type E
+                        }
+                    }
                 } else {
                     Write-CULog -Msg "Execution Time: PREVIEW MODE" -ShowConsole -Color Green -SubMsg
                 }
-                $batchCount = $batchCount+1
             }
         }
         
+        <#
+        ## Paths must be absolute
         function Test-CUFolderPath {
             Param(
                 [parameter(Mandatory = $true,
                 HelpMessage = "Specifies a path to be tested. The value of the Path parameter is case insensitive and used exactly as it is typed. No characters are interpreted as wildcard characters.")]
                 [string]$Path
             )
-            if ($path.EndsWith("\")) { $Path = $Path.TrimEnd("\") }  # remove last character if it ends in a backslash
-            foreach ($folder in $CUFolders) {
-                if (($folder.Path) -eq "$Path") {return $true}
-            }
+            ## GRL Previous method relied on checking a cache of folders which did not have newly crated folders in. Apparently there's a risk though that Get-CUFolders can miss recently created folders.
+            [string]$trimmed = $path.Trim( '\' )
+            Get-CUFolders | Where-Object { ( $_.FolderType -eq 'Folder' -or $_.FolderType -eq 'RootFolder' ) -and $_.Path -eq $trimmed } | . { Process {
+                return $true
+            }}
+
             return $false
         }
+        #>
 
         #attempt to setup the log file
         if ($PSBoundParameters.ContainsKey("LogFile")) {
@@ -326,43 +368,69 @@ function Build-CUTree {
     }
 
     Process {
-        <#
-        ## For debugging uncomment
-        $ErrorActionPreference = 'Stop'
-        $VerbosePreference = 'SilentlyContinue'
-        $DebugPreference = 'SilentlyContinue'
-        Set-StrictMode -Version Latest
-        #>
-
         $startTime = Get-Date
 
         #region Load ControlUp PS Module
         try {
-	        # Importing the latest ControlUp PowerShell Module
-	        $pathtomodule = (Get-ChildItem "$($env:ProgramFiles)\Smart-X\ControlUpMonitor\*\ControlUp.PowerShell.User.dll" -Recurse | Sort-Object LastWriteTime -Descending)[0]
-	        Import-Module $pathtomodule
+            ## Check CU monitor is installed and at least minimum required version
+            [string]$cuMonitor = 'ControlUp Monitor'
+            [string]$cuDll = 'ControlUp.PowerShell.User.dll'
+            [version]$minimumCUmonitorVersion = '8.1.5.600'
+            if( ! ( $installKey = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -Name DisplayName -ErrorAction SilentlyContinue| Where-Object DisplayName -eq $cuMonitor ) )
+            {
+                Write-Warning -Message "$cuMonitor does not appear to be installed"
+            }
+ 
+	        # Importing the latest ControlUp PowerShell Module - need to find path for dll which will be where cumonitor is running from. Don't use Get-Process as may not be elevated so would fail to get path to exe and win32_service fails as scheduled task with access denied
+            if( ! ( $cuMonitorServicePath = ( Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\cuMonitor' -Name ImagePath -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ImagePath ).Trim( '"' ) ) )
+            {
+                Write-Error -Message "$cuMonitor service path not found in registry"
+                break
+            }
+            elseif( ! ( $cuMonitorProperties = Get-ItemProperty -Path $cuMonitorServicePath -ErrorAction SilentlyContinue) )
+            {
+                Write-Error -Message "Unable to find CUmonitor service at $cuMonitorServicePath"
+                break
+            }
+            elseif( $cuMonitorProperties.VersionInfo.FileVersion -lt $minimumCUmonitorVersion )
+            {
+                Write-Error -Message "Found version $($cuMonitorProperties.VersionInfo.FileVersion) of cuMonitor.exe but need at least $($minimumCUmonitorVersion.ToString())"
+                break
+            }
+            elseif( ! ( $pathtomodule = Join-Path -Path (Split-Path -Path $cuMonitorServicePath -Parent) -ChildPath $cuDll ) )
+            {
+                Write-Error -Message "Unable to find $cuDll in `"$pathtomodule`""
+                break
+            }
+	        elseif( ! ( Import-Module $pathtomodule -PassThru ) )
+            {
+                break
+            }
+            elseif( ! ( Get-Command -Name 'Get-CUFolders' -ErrorAction SilentlyContinue ) )
+            {
+                Write-Error -Message "Loaded CU Monitor PowerShell module but unable to find cmdlet Get-CUFolders"
+                break
+            }
         }
         catch {
+            Write-CULog -Msg $_ -ShowConsole -Type E
             Write-CULog -Msg 'The required ControlUp PowerShell module was not found or could not be loaded. Please make sure this is a ControlUp Monitor machine.' -ShowConsole -Type E
+            $errorCount++
         }
         #endregion
 
-
         #region validate SiteId parameter
+        $Sites = Get-CUSites
+        <#
+        [hashtable] $SiteIdParam = @{}
         if ($PSBoundParameters.ContainsKey("SiteId")) {
             Write-CULog -Msg "Assigning resources to specific site: $SiteId" -ShowConsole
             $Sites = Get-CUSites
             $SiteIdGUID = ($Sites.Where{$_.Name -eq $SiteId}).Id
             Write-CULog -Msg "SiteId GUID: $SiteIdGUID" -ShowConsole -SubMsg
-            $SiteIdParam = @{SiteId = $SiteIdGUID}
+            $SiteIdParam.Add( 'SiteId' , $SiteIdGUID )
         }
-
-        #region validate DNSName parameter
-        if ($PSBoundParameters.ContainsKey("DNSName")) {
-            Write-CULog -Msg "Setting Custom DNS Suffix: $DNSName" -ShowConsole
-            $DNSNameParam = @{DNSName = $DNSName}
-        }
-
+        #>
 
         #region Retrieve ControlUp folder structure
         if (-not($DebugCUMachineEnvironment)) {
@@ -376,7 +444,7 @@ function Build-CUTree {
             Write-Debug "Number of objects in DebugCUMachineEnvironment: $($DebugCUMachineEnvironment.count)"
             if ($($DebugCUMachineEnvironment.count) -eq 2) {
                 foreach ($envObjects in $DebugCUMachineEnvironment) {
-                    if  ($($envObjects  | gm).TypeName[0] -eq "Create-CrazyCUEnvironment.CUComputerObject") {
+                    if  ($($envObjects  | Get-Member).TypeName[0] -eq "Create-CrazyCUEnvironment.CUComputerObject") {
                         $CUComputers = $envObjects
                     }
                 }
@@ -385,7 +453,7 @@ function Build-CUTree {
             }
         }
         
-        Write-CULog -Msg  "CU Computers Count: $($CUComputers.count)" -ShowConsole -Color Cyan
+        Write-CULog -Msg  "CU Computers Count: $(if( $CUComputers ) { $CUComputers.count } else { 0 } )" -ShowConsole -Color Cyan
         #create a hashtable out of the CUMachines object as it's much faster to query. This is critical when looking up Machines when ControlUp contains ten's of thousands of machines.
         $CUComputersHashTable = @{}
         foreach ($machine in $CUComputers) {
@@ -398,14 +466,14 @@ function Build-CUTree {
             try {
                 $CUFolders   = Get-CUFolders # add a filter on path so only folders within the rootfolder are used
             } catch {
-                Write-Error "Unable to get computers from ControlUp"
+                Write-Error "Unable to get folders from ControlUp"
                 break
             }
         } else {
             Write-Debug "Number of folder objects in DebugCUMachineEnvironment: $($DebugCUMachineEnvironment.count)"
             if ($($DebugCUMachineEnvironment.count) -eq 2) {
                 foreach ($envObjects in $DebugCUMachineEnvironment) {
-                    if  ($($envObjects  | gm).TypeName[0] -eq "Create-CrazyCUEnvironment.CUFolderObject") {
+                    if  ($($envObjects  | Get-Member).TypeName[0] -eq "Create-CrazyCUEnvironment.CUFolderObject") {
                         $CUFolders = $envObjects
                     }
                 }
@@ -414,69 +482,48 @@ function Build-CUTree {
             }
         }
 
-
-
-
         #endregion
         $OrganizationName = ($CUFolders)[0].path
         Write-CULog -Msg "Organization Name: $OrganizationName" -ShowConsole
 
-        #testing for folder structure:
-        Write-CULog -Msg "Preparing root path: $("$OrganizationName\$CURootFolder")" -ShowConsole
-        $builtPath = $false
-        if (-not(Test-CUFolderPath -Path $("$OrganizationName\$CURootFolder"))) {
-            [string]$folderTree = ""
-            foreach ($folder in "$OrganizationName\$CURootFolder".split("\")) {
-                Write-CULog -Msg "Checking for folder : $folder" -Verbose
-                if ($folder -eq $OrganizationName) {
-                    $folderTree += "$folder"
-                } else {
-                    $folderTree += "\$folder"
-                }
-                if (Test-CUFolderPath -Path $folderTree) {
-                    Write-CULog -Msg "Path Found          : $folderTree" -Verbose
-                } else {
-                    Write-CULog -Msg "Path NOT found      : $folderTree" -Verbose
-                    $LastBackslashPosition = $folderTree.LastIndexOf("\")
-	                if ($LastBackslashPosition -gt 0) {
-                        Write-CULog "Adding Folder $folder" -ShowConsole -Color Green
-                        Write-CULog "Add-CUFolder -Name $folder -ParentPath $($folderTree.Substring(0,$LastBackslashPosition))" -ShowConsole -SubMsg
-                        $builtPath = $true
-                        Add-CUFolder -Name $folder -ParentPath $folderTree.Substring(0,$LastBackslashPosition)
-                        
-                    }
-                }
-            }
+        [array]$rootFolders = @( Get-CUFolders | Where-Object FolderType -eq 'RootFolder' )
+
+        Write-Verbose -Message "Got $($rootFolders.Count) root folders/organisations: $( ($rootFolders | Select-Object -ExpandProperty Path) -join ' , ' )"
+
+        [string]$pathSoFar = $null
+        [bool]$builtPath = $false
+        ## strip off leading \ as CU cmdlets don't like it
+        [string[]]$CURootFolderElements = @( ($CURootFolder.Trim( '\' ).Split( '\' ) ))
+        Write-Verbose -Message "Got $($CURootFolderElements.Count) elements in path `"$CURootFolder`""
+
+        ## see if first folder element is the organisation name and if not then we will prepend it as must have that
+        if( $OrganizationName -ne $CURootFolderElements[0] ) {
+            Write-CULog -Msg "Organization Name `"$OrganizationName`" not found in path `"$CURootFolder`" so adding" -Verbose
+            $CURootFolder = Join-Path -Path $OrganizationName -ChildPath $CURootFolder
         }
 
-        #if we built the path we need to update our variable:
-        if ($builtPath) {
-            $attempts = 0
-            Write-CULog -Msg "Updating CUFolders variable" -Verbose
-            do {
-                Write-CULog -Msg "Checking for $("$OrganizationName\$CURootFolder")" -Verbose
-                sleep 10 ## Need to sleep some amount of time to allow the update on the common config or else the folder changes aren't picked up.
-                $CUFolders = Get-CUFolders
-                $attempts = $attempts+1
-            } While ((-not(Test-CUFolderPath -Path $("$OrganizationName\$CURootFolder"))) -or $attempts -ge 10)
-        }
+        ## Code making folders checks if each element in folder exists and if not makes it so no pointmaking path here
 
         #region Prepare items for synchronization
         #replace FolderPath in ExternalTree object with the local ControlUp Path:
         foreach ($obj in $externalTree) {
-            $objectFolderPath = $obj.FolderPath
-            $obj.FolderPath = "$("$OrganizationName\$CURootFolder")\$objectFolderPath"
+            $obj.FolderPath = (Join-Path -Path $CURootFolder -ChildPath $obj.FolderPath).Trim( '\' ) ## CU doesn't like leading \
         }
 
-        #We also create a hashtable to improve lookup performance for large organizations.
+        #We also create a hashtable to improve lookup performance for computers in large organizations.
         $ExtTreeHashTable = @{}
+        $ExtFolderPaths = New-Object -TypeName System.Collections.Generic.List[psobject]
         foreach ($ExtObj in $externalTree) {
             foreach ($obj in $ExtObj) {
-                $ExtTreeHashTable.Add($Obj.Name, $obj)
+                ## GRL only add computers since that is all we look up and get duplicate error if OU and computer have the same name
+                if( $obj.Type -eq 'Computer' ) {
+                    $ExtTreeHashTable.Add($Obj.Name, $obj)
+                }
+                else {
+                    $ExtFolderPaths.Add( $obj )
+                }
             }
         }
-
-        $ExtFolderPaths = $externalTree.Where{$_.Type -eq "Folder"}
 
         Write-CULog -Msg "Target Folder Paths:" -ShowConsole
         if ($ExtFolderPaths.count -ge 25) {
@@ -496,21 +543,44 @@ function Build-CUTree {
 
         #we'll output the statistics at the end -- also helps with debugging
         $FoldersToAdd       = New-Object System.Collections.Generic.List[PSObject]
-        
+        [hashtable]$newFoldersAdded = @{} ## keep track of what we've issued btch commands to create so we don't duplicate
+
         foreach ($ExtFolderPath in $ExtFolderPaths.FolderPath) {
-            if ("$ExtFolderPath" -notin $($CUFolders.Path)) {  ##check if folder doesn't already exist
-	            $LastBackslashPosition = $ExtFolderPath.LastIndexOf("\")
-	            if ($LastBackslashPosition -gt 0) {
-                    if ($FoldersToAddCount -ge $maxFolderBatchSize) {  ## we will execute folder batch operations $maxFolderBatchSize at a time
-                        Write-Verbose "Generating a new add folder batch"
-                        $FolderAddBatches.Add($FoldersToAddBatch)
-                        $FoldersToAddCount = 0
-                        $FoldersToAddBatch = New-CUBatchUpdate
+            if ( $ExtFolderPath -notin $CUFolders.Path ) {  ##check if folder doesn't already exist
+                [string]$pathSoFar = $null
+                ## Check each part of the path exists, or will be created, and if not add a task to create it
+                ForEach( $pathElement in ($ExtFolderPath.Trim( '\' )).Split( '\' ) ) {
+                    [string]$absolutePath = $(if( $pathSoFar ) { Join-Path -Path $pathSoFar -ChildPath $pathElement } else { $pathElement })
+                    if( $null -eq $newFoldersAdded[ $absolutePath ] -and $absolutePath -notin $CUFolders.Path  ) ## not already added it to folder creations or already exists
+                    {
+                        ## there is a bug that causes an error if a folder name being created in a batch already exists at the top level so we workaround it
+                        if( $batchCreateFolders )
+                        {
+                            if ($FoldersToAddCount -ge $maxFolderBatchSize) {  ## we will execute folder batch operations $maxFolderBatchSize at a time
+                                Write-Verbose "Generating a new add folder batch"
+                                $FolderAddBatches.Add($FoldersToAddBatch)
+                                $FoldersToAddCount = 0
+                                $FoldersToAddBatch = New-CUBatchUpdate
+                            }
+                            Add-CUFolder -Name $pathElement -ParentPath $pathSoFar -Batch $FoldersToAddBatch
+                        }
+                        else ## create folders immediately
+                        {
+                            if( -not $Preview )
+                            {
+                                Write-Verbose -Message "Creating folder `"$pathElement`" in `"$pathSoFar`""
+                                if( ! ( $folderCreated = Add-CUFolder -Name $pathElement -ParentPath $pathSoFar ) -or $folderCreated -notmatch "^Folder '$pathElement' was added successfully$" )
+                                {
+                                    Write-CULog -Msg "Failed to create folder `"$pathElement`" in `"$pathSoFar`" - $folderCreated" -ShowConsole -Type E
+                                }
+                            }
+                        }
+                        $FoldersToAdd.Add("Add-CUFolder -Name `"$pathElement`" -ParentPath `"$pathSoFar`"")
+                        $FoldersToAddCount++
+                        $newFoldersAdded.Add( $absolutePath , $ExtFolderPath )
                     }
-                    Add-CUFolder -Name $ExtFolderPath.Substring($LastBackslashPosition+1) -ParentPath $ExtFolderPath.Substring(0,$LastBackslashPosition) -Batch $FoldersToAddBatch
-                    $FoldersToAdd.Add("Add-CUFolder -Name $($ExtFolderPath.Substring($LastBackslashPosition+1)) -ParentPath `"$($ExtFolderPath.Substring(0,$LastBackslashPosition))`"")
-                    $FoldersToAddCount = $FoldersToAddCount+1
-	            }   
+                    $pathSoFar = $absolutePath
+                }
             }
         }
         if ($FoldersToAddCount -le $maxFolderBatchSize -and $FoldersToAddCount -ne 0) { $FolderAddBatches.Add($FoldersToAddBatch) }
@@ -536,6 +606,11 @@ function Build-CUTree {
         
         Write-CULog "Determining Computer Objects to Add or Move" -ShowConsole
         foreach ($ExtComputer in $ExtComputers) {
+        if (($Sites.Where{$_.Name -eq $ExtComputer.CUSite}).Id) {
+            $SiteIdGUID = ($Sites.Where{$_.Name -eq $ExtComputer.CUSite}).Id
+        } else {
+            $SiteIdGUID = ($Sites.Where{$_.Name -eq "Default"}).Id
+        }
 	        if (($CUComputersHashTable.Contains("$($ExtComputer.Name)"))) {
     	        if ("$($ExtComputer.FolderPath)\" -notlike "$($CUComputersHashTable[$($ExtComputer.name)].Path)\") {
                     if ($ComputersMoveCount -ge $maxBatchSize) {  ## we will execute computer batch operations $maxBatchSize at a time
@@ -558,23 +633,20 @@ function Build-CUTree {
                     }
                 
     	        try {
-                         Add-CUComputer -Domain $ExtComputer.Domain -Name $ExtComputer.Name -FolderPath "$($ExtComputer.FolderPath)" -Batch $ComputersAddBatch @SiteIdParam @DNSNameParam
+                         
+                         Write-Verbose "$($extcomputer.Name) - $($ExtComputer.CUSite) - $SiteIdGUID"
+                         Add-CUComputer -Domain $ExtComputer.Domain -Name $ExtComputer.Name -FolderPath "$($ExtComputer.FolderPath)" -Batch $ComputersAddBatch -SiteId $SiteIdGUID -DnsName $ExtComputer.DNSName
                 } catch {
                          Write-CULog "Error while attempting to run Add-CUComputer" -ShowConsole -Type E
                          Write-CULog "$($Error[0])"  -ShowConsole -Type E
                 }
-                if ($PSBoundParameters.ContainsKey("SiteId") -and $PSBoundParameters.ContainsKey("DNSName")) {
-                    $MachinesToAdd.Add("Add-CUComputer -Domain $($ExtComputer.Domain) -Name $($ExtComputer.Name) -FolderPath `"$($ExtComputer.FolderPath)`" -SiteId $SiteIdGUID -DNSName $DNSName")
-                } elseif ($PSBoundParameters.ContainsKey("SiteId") -and -not $PSBoundParameters.ContainsKey("DNSName")) { 
-                    $MachinesToAdd.Add("Add-CUComputer -Domain $($ExtComputer.Domain) -Name $($ExtComputer.Name) -FolderPath `"$($ExtComputer.FolderPath)`" -SiteIdGUID $SiteIdGUID")
-                } elseif ($PSBoundParameters.ContainsKey("DNSName") -and -not $PSBoundParameters.ContainsKey("SiteId")) {
-                    $MachinesToAdd.Add("Add-CUComputer -Domain $($ExtComputer.Domain) -Name $($ExtComputer.Name) -FolderPath `"$($ExtComputer.FolderPath)`" -DNSName $DNSName")
-                } else {
-                    $MachinesToAdd.Add("Add-CUComputer -Domain $($ExtComputer.Domain) -Name $($ExtComputer.Name) -FolderPath `"$($ExtComputer.FolderPath)`"")
-                }
+
+                $MachinesToAdd.Add("Add-CUComputer -Domain $($ExtComputer.Domain) -Name $($ExtComputer.Name) -FolderPath `"$($ExtComputer.FolderPath)`" -SiteId $SiteIdGUID DnsName $($ExtComputer.DNSName)")
+
                 $ComputersAddCount = $ComputersAddCount+1
 	        }
         }
+
         if ($ComputersMoveCount -le $maxBatchSize -and $ComputersMoveCount -ne 0) { $ComputersMoveBatches.Add($ComputersMoveBatch) }
         if ($ComputersAddCount -le $maxBatchSize -and $ComputersAddCount -ne 0)   { $ComputersAddBatches.Add($ComputersAddBatch)   }
 
@@ -587,17 +659,33 @@ function Build-CUTree {
         if ($Delete) {
             Write-CULog "Determining Objects to be Removed" -ShowConsole
 	        # Build batch for folders which are in ControlUp but not in the external source
-            if ($CUFolders.where{$_.Path -like "$("$OrganizationName\$CURootFolder")\*"}.count -eq 0) { ## Get CUFolders filtered to targetted sync path
-               $CUFolderSyncRoot = $CUFolders.where{$_.Path -like "$("$OrganizationName\$CURootFolder")"} ## if count is 0 then no subfolders exist
+<#
+            if ($CUFolders.where{ $_.Path -like "$("$CURootFolder")\*" }.count -eq 0) { ## Get CUFolders filtered to targetted sync path
+               $CUFolderSyncRoot = $CUFolders.where{$_.Path -like "$("$CURootFolder")"} ## if count is 0 then no subfolders exist
                Write-CULog "Root Target Path : Only Target Folder Exists" -ShowConsole -Verbose
             }
-            if ($CUFolders.where{$_.Path -like "$("$OrganizationName\$CURootFolder")\*"}.count -ge 1) { ## if count is ge 1 then grab all subfolders
-                $CUFolderSyncRoot = $CUFolders.where{$_.Path -like "$("$OrganizationName\$CURootFolder")\*"} 
+            if ($CUFolders.where{$_.Path -like "$("$CURootFolder")\*"}.count -ge 1) { ## if count is ge 1 then grab all subfolders
+                $CUFolderSyncRoot = $CUFolders.where{$_.Path -like "$("$CURootFolder")\*"} 
                 Write-CULog "Root Target Path : Subfolders detected" -ShowConsole -Verbose
+            }
+#>
+            [string]$folderRegex = "^$([regex]::Escape( $CURootFolder ))\\.+"
+            [array]$CUFolderSyncRoot = @( $CUFolders.Where{ $_.Path -match $folderRegex } )
+            if( $CUFolderSyncRoot -and $CUFolderSyncRoot.Count )
+            {
+                Write-CULog "Root Target Path : $($CUFolderSyncRoot.Count) subfolders detected" -ShowConsole -Verbose
+            }
+            else
+            {
+                Write-CULog "Root Target Path : Only Target Folder Exists" -ShowConsole -Verbose
             }
             Write-CULog "Determining Folder Objects to be Removed" -ShowConsole
 	        foreach ($CUFolder in $($CUFolderSyncRoot.Path)) {
-    	        if (($CUFolder -notin $ExtFolderPaths.FolderPath) -and ($CUFolder -ne $("$OrganizationName\$CURootFolder"))) { #prevents excluding the root folder
+                $folderRegex = "$([regex]::Escape( $CUFolder ))"
+                ## need to test if the whole path matches or it's a sub folder (so "Folder 1" won't match "Folder 12")
+                if( $ExtFolderPaths.Where( { $_.FolderPath -match "^$folderRegex$" -or $_.FolderPath -match "^$folderRegex\\" } ).Count -eq 0 -and $CUFolder -ne $CURootFolder ) {
+                ## can't use a simple -notin as path may be missing but there may be child paths of it - GRL
+    	        ##if (($CUFolder -notin $ExtFolderPaths.FolderPath) -and ($CUFolder -ne $("$CURootFolder"))) { #prevents excluding the root folder
                     if ($Delete) {
                         if ($FoldersToRemoveCount -ge $maxFolderBatchSize) {  ## we will execute computer batch operations $maxBatchSize at a time
                             Write-Verbose "Generating a new remove folder batch"
@@ -605,18 +693,21 @@ function Build-CUTree {
                             $FoldersToRemoveCount = 0
                             $FoldersToRemoveBatch = New-CUBatchUpdate
                         }
-        	            Remove-CUFolder -FolderPath "$CUFolder" -Force -Batch $FoldersToRemoveBatch
-                        $FoldersToRemove.Add("Remove-CUFolder -FolderPath `"$CUFolder`" -Force")
-                        $FoldersToRemoveCount = $FoldersToRemoveCount+1
+                        if ($CUFolder -notlike "*Brokers") {
+        	                Remove-CUFolder -FolderPath "$CUFolder" -Force -Batch $FoldersToRemoveBatch
+                            $FoldersToRemove.Add("Remove-CUFolder -FolderPath `"$CUFolder`" -Force")
+                            $FoldersToRemoveCount = $FoldersToRemoveCount+1
+                        }
                     }
     	        }
 	        }
 
             Write-CULog "Determining Computer Objects to be Removed" -ShowConsole
 	        # Build batch for computers which are in ControlUp but not in the external source
-	        foreach ($CUComputer in $CUComputers.where{$_.path.startsWith(("$OrganizationName\$CURootFolder").ToLower())}) { #hey! StartsWith is case sensitive..  at least we return path in lowercase.
-                if ($($ExtFolderPaths.FolderPath) -contains $CUComputer.path) {
-    	            if (-not($ExtTreeHashTable.Contains("$($CUComputer.name)"))) {
+            [string]$curootFolderAllLower = $CURootFolder.ToLower()
+	        foreach ($CUComputer in $CUComputers.Where{$_.path.startsWith( $curootFolderAllLower ) }) { #hey! StartsWith is case sensitive..  at least we return path in lowercase.
+                ##if ($($ExtFolderPaths.FolderPath) -contains $CUComputer.path) {
+    	            if (-not $ExtTreeHashTable[ $CUComputer.name ] ) {
                         if ($Delete) {
                             if ($FoldersToRemoveCount -ge $maxFolderBatchSize) {  ## we will execute computer batch operations $maxBatchSize at a time
                                 Write-Verbose "Generating a new remove computer batch"
@@ -629,14 +720,13 @@ function Build-CUTree {
                             $ComputersRemoveCount = $ComputersRemoveCount+1
                         }
                     }
-    	        }
+    	        ##}
 	        }
         }
         if ($FoldersToRemoveCount -le $maxFolderBatchSize -and $FoldersToRemoveCount -ne 0) { $FoldersToRemoveBatches.Add($FoldersToRemoveBatch)   }
         if ($ComputersRemoveCount -le $maxBatchSize -and $ComputersRemoveCount -ne 0)       { $ComputersRemoveBatches.Add($ComputersRemoveBatch)   }
 
         #endregion
-
 
         Write-CULog -Msg "Folders to Add     : $($FoldersToAdd.Count)" -ShowConsole -Color White 
         Write-CULog -Msg "Folders to Add Batches     : $($FolderAddBatches.Count)" -ShowConsole -Color Gray -SubMsg
@@ -650,7 +740,6 @@ function Build-CUTree {
             }
         }
 
-
         Write-CULog -Msg "Folders to Remove  : $($FoldersToRemove.Count)" -ShowConsole -Color White
         Write-CULog -Msg "Folders to Remove Batches  : $($FoldersToRemoveBatches.Count)" -ShowConsole -Color Gray -SubMsg
         if ($($FoldersToRemove.Count) -ge 25) {
@@ -659,7 +748,7 @@ function Build-CUTree {
             }
         } else {
             foreach ($obj in $FoldersToRemove) {
-                Write-CULog -Msg "$obj" -ShowConsole -Color Red -SubMsg
+                Write-CULog -Msg "$obj" -ShowConsole -Color DarkYellow -SubMsg
             }
         }
 
@@ -695,21 +784,22 @@ function Build-CUTree {
             }
         } else {
             foreach ($obj in $MachinesToRemove) {
-                Write-CULog -Msg "$obj" -ShowConsole -Color Red -SubMsg
+                Write-CULog -Msg "$obj" -ShowConsole -Color DarkYellow -SubMsg
             }
         }
             
-
         $endTime = Get-Date
 
         Write-CULog -Msg "Build-CUTree took: $($(New-TimeSpan -Start $startTime -End $endTime).Seconds) Seconds." -ShowConsole -Color White
-        Write-CULog -Msg "Committing Changes:" -ShowConsole -Color Red
-        if ($ComputersRemoveBatches.Count -gt 0) { Execute-PublishCUUpdates -BatchObject $ComputersRemoveBatches -Message "Executing Computer Object Removal" }
-        if ($FoldersToRemoveBatches.Count -gt 0) { Execute-PublishCUUpdates -BatchObject $FoldersToRemoveBatches -Message "Executing Folder Object Removal"   }
-        if ($FolderAddBatches.Count -gt 0)       { Execute-PublishCUUpdates -BatchObject $FolderAddBatches -Message "Executing Folder Object Adds"            }
-        if ($ComputersAddBatches.Count -gt 0)    { Execute-PublishCUUpdates -BatchObject $ComputersAddBatches -Message "Executing Computer Object Adds"       }
-        if ($ComputersMoveBatches.Count -gt 0)   { Execute-PublishCUUpdates -BatchObject $ComputersMoveBatches -Message "Executing Computer Object Moves"     }
+        Write-CULog -Msg "Committing Changes:" -ShowConsole -Color DarkYellow
+        if ($ComputersRemoveBatches.Count -gt 0) { $errorCount += Execute-PublishCUUpdates -BatchObject $ComputersRemoveBatches -Message "Executing Computer Object Removal" }
+        if ($FoldersToRemoveBatches.Count -gt 0) { $errorCount += Execute-PublishCUUpdates -BatchObject $FoldersToRemoveBatches -Message "Executing Folder Object Removal"   }
+        if ($FolderAddBatches.Count -gt 0 -and $batchCreateFolders )       { $errorCount += Execute-PublishCUUpdates -BatchObject $FolderAddBatches -Message "Executing Folder Object Adds"            }
+        if ($ComputersAddBatches.Count -gt 0)    { $errorCount += Execute-PublishCUUpdates -BatchObject $ComputersAddBatches -Message "Executing Computer Object Adds"       }
+        if ($ComputersMoveBatches.Count -gt 0)   { $errorCount += Execute-PublishCUUpdates -BatchObject $ComputersMoveBatches -Message "Executing Computer Object Moves"     }
 
+        Write-CULog -Msg "Returning $errorCount to caller"
+
+        return $errorCount
     }
-    
 }
