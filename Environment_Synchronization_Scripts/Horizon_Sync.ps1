@@ -66,6 +66,7 @@
     Guy Leech,              2020-11-05 - Added -batchCreateFolders option to create folders in batches (faster) otherwise creates them one at a time
     Wouter Kursten          2021-01-21 - Updates Synopsis
     Guy Leech,              2021-02-12 - Added -force for when large number of folders to add
+    Wouter Kursten          2021-03-17 - Re-Added renaming of localhvsiteonly to localhvpodonly
 
 .LINK
     https://support.controlup.com/hc/en-us/articles/360015912718
@@ -78,7 +79,7 @@
     Version:        0.1
     Author:         Wouter Kursten
     Creation Date:  2020-08-06
-    Updated:        2021-01-18
+    Updated:        2021-03-17
     Purpose:        Created for VMware Horizon Sync
 #>
 
@@ -104,7 +105,7 @@ Param
     [string] $LogFile,
 
     [Parameter(Mandatory=$false, HelpMessage='Synchronise the local site only' )]
-    [switch] $LocalHVSiteOnly,
+    [switch] $LocalHVPodOnly,
 
     [Parameter(Mandatory=$false,  HelpMessage='Enter a ControlUp Site name')]
     [ValidateNotNullOrEmpty()]
@@ -113,7 +114,7 @@ Param
     [Parameter(Mandatory=$false, HelpMessage='File with a list of exceptions, machine names and/or desktop pools' )]
     [ValidateNotNullOrEmpty()]
     [string] $Exceptionsfile ,
-    
+
     [Parameter(Mandatory=$false, HelpMessage='Create folders in batches rather than individually')]
 	[switch] $batchCreateFolders ,
 
