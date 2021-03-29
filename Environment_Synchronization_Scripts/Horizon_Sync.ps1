@@ -564,7 +564,7 @@ foreach ($hvconnectionserver in $hvconnectionservers){
         [string]$targetfolderpath=""
     }
     # Get the Horizon View desktop Pools
-    [array]$HVPools = @( Get-HVDesktopPools -HVConnectionServer $objHVConnectionServer )
+    [array]$HVPools = Get-HVDesktopPools -HVConnectionServer $objHVConnectionServer
     
 
     if($NULL -ne $hvpools){
