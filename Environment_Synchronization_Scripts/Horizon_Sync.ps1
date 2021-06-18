@@ -138,14 +138,6 @@ $ProgressPreference = 'SilentlyContinue'
 [string]$scriptPath = Split-Path -Path (& { $myInvocation.ScriptName }) -Parent
 [string]$buildCuTreeScriptPath = [System.IO.Path]::Combine( $scriptPath , $buildCuTreeScript )
 
-if( ! ( Test-Path -Path $buildCuTreeScriptPath -PathType Leaf -ErrorAction SilentlyContinue ) )
-{
-    [string]$errorMessage = "Unable to find script `"$buildCuTreeScript`" in `"$scriptPath`""
-    Write-CULog -Msg $errorMessage -ShowConsole -Type E
-    Throw $errorMessage
-}
-
-. $buildCuTreeScriptPath
 
 function Make-NameWithSafeCharacters ([string]$string) {
     ###### TODO need to replace the folder path characters that might be illegal
@@ -451,6 +443,15 @@ function Write-CULog {
         }
     }
 }
+
+if( ! ( Test-Path -Path $buildCuTreeScriptPath -PathType Leaf -ErrorAction SilentlyContinue ) )
+{
+    [string]$errorMessage = "Unable to find script `"$buildCuTreeScript`" in `"$scriptPath`""
+    Write-CULog -Msg $errorMessage -ShowConsole -Type E
+    Throw $errorMessage
+}
+
+. $buildCuTreeScriptPath
 
 # Set the credentials location
 [string]$strCUCredFolder = "$([environment]::GetFolderPath( [Environment+SpecialFolder]::CommonApplicationData ))\ControlUp\ScriptSupport"
