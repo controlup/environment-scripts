@@ -18,6 +18,7 @@
         @guyrleech 2021-02-11   Change SiteId to SiteName and errors if does not exist. Added batch folder warning as can cause issues
         @guyrleech 2021-02-12   Added delay between each folder add when a large number being added
         @guyrleech 2021-07-29   Added more logging to log file. Added email notification
+        @guyrleech 2021-08-13   Added checking and more logging for CU Monitor service state
 #>
 
 <#
@@ -317,9 +318,35 @@ function Build-CUTree {
             [version]$minimumCUmonitorVersion = '8.1.5.600'
             if( ! ( $installKey = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -Name DisplayName -ErrorAction SilentlyContinue| Where-Object DisplayName -eq $cuMonitor ) )
             {
-                Write-Warning -Message "$cuMonitor does not appear to be installed"
+                Write-CULog -ShowConsole -Type W -Msg "$cuMonitor does not appear to be installed"
             }
  
+            if( ! ( $cuMonitorService = Get-WmiObject -Class win32_service -filter "Name = 'CuMonitor'" ) )
+            {
+                Write-CULog -ShowConsole -Type W -Msg "$cuMonitor service not found"
+            }
+            else
+            {
+                if( $cuMonitorService.State -ne 'Running' )
+                {
+                    Write-CULog -ShowConsole -Type W -Msg "$cuMonitor service not running, state is $($cuMonitorService.State)"
+                }
+                elseif( ! ( $cuMonitorProcess = Get-Process -Id $cuMonitorService.ProcessId -ErrorAction SilentlyContinue ) )
+                {
+                    Write-CULog -ShowConsole -Type W -Msg "$cuMonitor service running, but unable to find pid $($cuMonitorService.ProcessId)"
+                }
+                else
+                {
+                    [string]$message =  "$cuMonitor service running as pid $($cuMonitorService.ProcessId)"
+                    ## if not running as admin/elevated then won't be able to get start time
+                    if( $cuMonitorProcess.StartTime )
+                    {
+                        $message += ", started at $(Get-Date -Date $cuMonitorProcess.StartTime -Format G)"
+                    }
+                    Write-CULog -Msg $message
+                }
+            }
+
 	        # Importing the latest ControlUp PowerShell Module - need to find path for dll which will be where cumonitor is running from. Don't use Get-Process as may not be elevated so would fail to get path to exe and win32_service fails as scheduled task with access denied
             if( ! ( $cuMonitorServicePath = ( Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\cuMonitor' -Name ImagePath -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ImagePath ) ) )
             {
