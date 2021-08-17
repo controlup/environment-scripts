@@ -19,6 +19,7 @@
         @guyrleech 2021-02-12   Added delay between each folder add when a large number being added
         @guyrleech 2021-07-29   Added more logging to log file. Added email notification
         @guyrleech 2021-08-13   Added checking and more logging for CU Monitor service state
+        @guyrleech 2021-08-16   Changed service checking as was causing access denied errors
 #>
 
 <#
@@ -315,36 +316,26 @@ function Build-CUTree {
             ## Check CU monitor is installed and at least minimum required version
             [string]$cuMonitor = 'ControlUp Monitor'
             [string]$cuDll = 'ControlUp.PowerShell.User.dll'
+            [string]$cuMonitorProcessName = 'CUmonitor'
             [version]$minimumCUmonitorVersion = '8.1.5.600'
             if( ! ( $installKey = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -Name DisplayName -ErrorAction SilentlyContinue| Where-Object DisplayName -eq $cuMonitor ) )
             {
                 Write-CULog -ShowConsole -Type W -Msg "$cuMonitor does not appear to be installed"
             }
- 
-            if( ! ( $cuMonitorService = Get-WmiObject -Class win32_service -filter "Name = 'CuMonitor'" ) )
+            ## when running via scheduled task we do not have sufficient rights to query services
+            if( ! ( $cuMonitorProcess = Get-Process -Name $cuMonitorProcessName -ErrorAction SilentlyContinue ) )
             {
-                Write-CULog -ShowConsole -Type W -Msg "$cuMonitor service not found"
+                Write-CULog -ShowConsole -Type W -Msg "Unable to find process $cuMonitorProcessName for $cuMonitor service" ## pid $($cuMonitorService.ProcessId)"
             }
             else
             {
-                if( $cuMonitorService.State -ne 'Running' )
+                [string]$message =  "$cuMonitor service running as pid $($cuMonitorProcess.Id)"
+                ## if not running as admin/elevated then won't be able to get start time
+                if( $cuMonitorProcess.StartTime )
                 {
-                    Write-CULog -ShowConsole -Type W -Msg "$cuMonitor service not running, state is $($cuMonitorService.State)"
+                    $message += ", started at $(Get-Date -Date $cuMonitorProcess.StartTime -Format G)"
                 }
-                elseif( ! ( $cuMonitorProcess = Get-Process -Id $cuMonitorService.ProcessId -ErrorAction SilentlyContinue ) )
-                {
-                    Write-CULog -ShowConsole -Type W -Msg "$cuMonitor service running, but unable to find pid $($cuMonitorService.ProcessId)"
-                }
-                else
-                {
-                    [string]$message =  "$cuMonitor service running as pid $($cuMonitorService.ProcessId)"
-                    ## if not running as admin/elevated then won't be able to get start time
-                    if( $cuMonitorProcess.StartTime )
-                    {
-                        $message += ", started at $(Get-Date -Date $cuMonitorProcess.StartTime -Format G)"
-                    }
-                    Write-CULog -Msg $message
-                }
+                Write-CULog -Msg $message
             }
 
 	        # Importing the latest ControlUp PowerShell Module - need to find path for dll which will be where cumonitor is running from. Don't use Get-Process as may not be elevated so would fail to get path to exe and win32_service fails as scheduled task with access denied
@@ -377,6 +368,7 @@ function Build-CUTree {
         {
             $exception = $_
             Write-CULog -Msg $exception -ShowConsole -Type E
+            Write-CULog -Msg (Get-PSCallStack|Format-Table)
             Write-CULog -Msg 'The required ControlUp PowerShell module was not found or could not be loaded. Please make sure this is a ControlUp Monitor machine.' -ShowConsole -Type E
             Send-EmailAlert -SmtpServer $SmtpServer -from $emailFrom -to $emailTo -useSSL:$emailUseSSL -subject "Fatal error from ControlUp sync script `"$callingScript`" on $env:COMPUTERNAME" -body "$exception"
             $errorCount++
