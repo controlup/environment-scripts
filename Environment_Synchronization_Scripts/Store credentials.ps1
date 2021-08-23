@@ -21,6 +21,7 @@
                             10/09/2020 - WOuter Kursten - Third Version
                             12/11/2020 - Guy Leech - added credential type argument for use with Horizon Cloud so one user can have multiple credentials
                             08/12/2020 - Added parameter sets with option for PSCredential object passing (pass as $null to prompt for credentials)
+                            07/06/2021 - Merged Azure credentials script
 
     Changelog ;
         Second Version
@@ -49,6 +50,9 @@
 
 Param
 (
+    [Parameter(Mandatory,HelpMessage='EUC environment to create credential file for')]
+    [ValidateSet('HorizonView','Azure','HorizonCloudmyVMware','HorizonCloudDomain')]
+    [string]$credentialType ,
     [Parameter(Mandatory,ParameterSetName='ClearText',HelpMessage='username to store in credential file - email or domain format')]
     [string]$userName ,
     [Parameter(Mandatory,ParameterSetName='ClearText',HelpMessage='Password')]
@@ -57,7 +61,12 @@ Param
     [string]$passwordAgain ,
     [Parameter(Mandatory,ParameterSetName='Credential',HelpMessage='PSCredential object')]
     [System.Management.Automation.PSCredential]$credential ,
-    [string]$credentialType = 'HorizonView'
+    [Parameter(Mandatory,ParameterSetName='Azure',HelpMessage='Service Principal Tenant Id')]
+    [string]$tenantId ,
+    [Parameter(Mandatory,ParameterSetName='Azure',HelpMessage='Service Principal Application (client) Id')]
+    [string]$applicationId ,
+    [Parameter(Mandatory,ParameterSetName='Azure',HelpMessage='Service Principal Application (client) secret')]
+    [string]$applicationSecret
 )
 
 $VerbosePreference = $(if( $PSBoundParameters[ 'verbose' ] ) { $VerbosePreference } else { 'SilentlyContinue' })
@@ -127,7 +136,10 @@ Function New-CUStoredCredential {
         [string]$Username,
         [parameter(Mandatory = $true,
             HelpMessage = "The password to be stored in the PSCredential object.")]
-        [string]$Password,
+        [string]$password ,
+        [parameter(Mandatory = $false,
+            HelpMessage = "The Azure Service Principal tenant id")]
+        [string]$tenantId,
         [parameter(Mandatory = $true,
             HelpMessage = "The system the credentials will be used for.")]
         [string]$System
@@ -164,14 +176,40 @@ Function New-CUStoredCredential {
         [string]$credsfile = [System.IO.Path]::Combine( $strCredTargetFolder , ( $Env:Username + '_' + $System + '_Cred.xml' ) )
         Write-Verbose -Message "Writing credentials to file `"$credsfile`""
 
-        # Store the PSCredential object
+        # Store the PSCredential object or the Azure details
         try {
-            $Cred | Export-CliXml -Path $credsfile -Force  
-            Out-CUConsole -Message "PSCredential object created and stored in `"$strCredTargetFolder`"" 
+            $export = $cred
+
+            if( ! [string]::IsNullOrEmpty( $tenantId ) )
+            {
+                [string]$guidRegex = '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                if( $tenantId -notmatch $guidRegex )
+                {
+                    $export = $null
+                    Out-CUConsole -Message "Tenant id `"$tenantId`" is not a correctly formed GUID"
+                }
+                elseif( $Username -notmatch $guidRegex )
+                {
+                    $export = $null
+                    Out-CUConsole -Message "Application id `"$Username`" is not a correctly formed GUID"
+                }
+                else
+                {
+                    $export = @{
+                        'tenantID' = $tenantID
+                        'spCreds' = $cred }
+                }
+            }
+            if( $export )
+            {
+                Export-Clixml -Path $credsfile -InputObject $export -Force
+
+                Out-CUConsole -Message "Credential object created and stored in `"$credsFile`"" 
+            }
         }
         catch {
             Remove-Item -path $credsfile -force
-            Out-CUConsole -Message "There was a problem saving the PSCredential object to `"$strCredTargetFolder`" - this may be a permission issue or there is no local profile." -Exception $_
+            Out-CUConsole -Message "There was a problem saving the PSCredential object to `"$credsfile`" - this may be a permission issue or there is no local profile." -Exception $_
         }
     }
 }
@@ -182,7 +220,15 @@ if( ! (Get-CimInstance -Classname win32_userprofile | Where-Object localpath -eq
     Out-CUConsole -message "User $Env:Username has no profile on this system. This is a requirement for creating the credentials file. Please log onto this machine once in order to create your user profile."  -exception "No local profile found" # this is a limitation of Powershell
 }
 
-If( $PsCmdlet.ParameterSetName -eq 'Credential' )
+If ( $credentialType -match 'Azure' ) {
+    if( $PsCmdlet.ParameterSetName -eq 'Azure' ) {
+        New-CUStoredCredential -Username $applicationId -Password $applicationSecret -System $credentialType -TenantId $tenantId
+    }
+    else {
+        Out-CUConsole -Message "Wrong parameters used for $credentialType credential type - use -applicationId, -applicationSecret & -tenantId" -Stop
+    }
+}
+ElseIf( $PsCmdlet.ParameterSetName -eq 'Credential' )
 {
     New-CUStoredCredential -Username $credential.userName -Password $credential.GetNetworkCredential().Password -System $credentialType
 }

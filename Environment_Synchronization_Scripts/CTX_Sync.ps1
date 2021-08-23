@@ -60,6 +60,18 @@
 .PARAMETER force
     When the number of new folders to create is large, force the operation to continue otherwise it will abort before commencing
 
+.PARAMETER SmtpServer
+    Name/IP address of an SMTP server to send email alerts via. Optionally specify : and a port number if not the default of 25
+
+.PARAMETER emailFrom
+    Email address from which to send email alerts from
+
+.PARAMETER emailTo
+    Email addresses to which to send email alerts to
+
+.PARAMETER emailUseSSL
+    Use SSL for SMTP server communication
+
 .EXAMPLE
     . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local","ctxdc01.bottheory.local" -folderPath "CUSync\Citrix" -includeDeliveryGroup "EpicNorth","EpicSouth","EpicCentral","Cerner*" -excludeDeliveryGroup "CernerNorth" -addBrokersToControlUp -MatchEUCEnvTree
         Contacts the brokers ddc1.bottheory.local and ctxdc01.bottheory.local, it will save the objects to the ControlUp folder 
@@ -82,6 +94,8 @@
     Guy Leech,            2020-10-30 - Fixed bug where -Adminaddress not passed to Get-BrokerDesktopGroup
     Guy Leech,            2020-11-02 - Added -batchCreateFolders option to create folders in batches (faster) otherwise creates them one at a time
     Guy Leech,            2021-02-12 - Added -force for when large number of folders to add
+    Guy Leech,            2021-07-30 - Added email alerting and writing to logfile
+
 .LINK
 
 .COMPONENT
@@ -140,7 +154,19 @@ Param
 	[switch] $batchCreateFolders ,
 
     [Parameter(Mandatory=$false, HelpMessage='Force folder creation if number exceeds safe limit' )]
-	[switch] $force
+	[switch] $force ,
+
+    [Parameter(Mandatory=$false, HelpMessage='Smtp server to send alert emails from' )]
+	[string] $SmtpServer ,
+
+    [Parameter(Mandatory=$false, HelpMessage='Email address to send alert email from' )]
+	[string] $emailFrom ,
+
+    [Parameter(Mandatory=$false, HelpMessage='Email addresses to send alert email to' )]
+	[string[]] $emailTo ,
+
+    [Parameter(Mandatory=$false, HelpMessage='Use SSL to send email alert' )]
+	[switch] $emailUseSSL
 ) 
 
 ## GRL this way allows script to be run with debug/verbose without changing script
@@ -148,6 +174,8 @@ $VerbosePreference = $(if( $PSBoundParameters[ 'verbose' ] ) { $VerbosePreferenc
 $DebugPreference = $(if( $PSBoundParameters[ 'debug' ] ) { $DebugPreference } else { 'SilentlyContinue' })
 $ErrorActionPreference = $(if( $PSBoundParameters[ 'erroraction' ] ) { $ErrorActionPreference } else { 'Stop' })
 $ProgressPreference = 'SilentlyContinue'
+
+$Global:LogFile = $PSBoundParameters.LogFile
 
 ## Script from ControlUp which must reside in the same folder as this script
 [string]$buildCuTreeScript = 'Build-CUTree.ps1'
@@ -180,8 +208,10 @@ class ControlUpObject{
 # dot sourcing Functions
 
 ## GRL Don't assume user has changed location so get the script path instead
-[string]$scriptPath = Split-Path -Path (& { $myInvocation.ScriptName }) -Parent
+[string]$thisScript = & { $myInvocation.ScriptName }
+[string]$scriptPath = Split-Path -Path $thisScript -Parent
 [string]$buildCuTreeScriptPath = [System.IO.Path]::Combine( $scriptPath , $buildCuTreeScript )
+[string]$errorMessage = $null
 
 if( ! ( Test-Path -Path $buildCuTreeScriptPath -PathType Leaf -ErrorAction SilentlyContinue ) )
 {
@@ -196,7 +226,9 @@ if( ! ( Test-Path -Path $buildCuTreeScriptPath -PathType Leaf -ErrorAction Silen
 if( ! (  Import-Module -Name Citrix.DelegatedAdmin.Commands -ErrorAction SilentlyContinue -PassThru -Verbose:$false) `
     -and ! ( Add-PSSnapin -Name Citrix.Broker.Admin.* -ErrorAction SilentlyContinue -PassThru -Verbose:$false) )
 {
-    Throw 'Failed to load Citrix PowerShell cmdlets - is this a Delivery Controller or have Studio or the PowerShell SDK installed ?'
+    $errorMessage = 'Failed to load Citrix PowerShell cmdlets - is this a Delivery Controller or have Studio or the PowerShell SDK installed ?'
+    Send-EmailAlert -SmtpServer $SmtpServer -from $emailFrom -to $emailTo -useSSL:$emailUseSSL -subject "Fatal error from ControlUp sync script `"$thisScript`" on $env:COMPUTERNAME" -body "$errorMessage"
+    Throw $errorMessage
 }
 
 Write-Host "Brokers: $Brokers"
@@ -213,8 +245,8 @@ if( $enabledOnly )
 if ($brokers.count -eq 1 -and $brokers[0].IndexOf(',') -ge 0) {
     $brokers = $brokers -split ','
 }
-
-foreach ($adminAddr in $brokers) {
+Try {
+  foreach ($adminAddr in $brokers) {
     $brokerParameters.AdminAddress = $adminAddr
     $CTXSite = Get-BrokerSite -AdminAddress $adminAddr
     $CTXSites.Add($CTXSite)
@@ -234,42 +266,59 @@ foreach ($adminAddr in $brokers) {
             if (-not($DeliveryGroups.Name.Contains($DeliveryGroup.Name))) {  #ensures we don't add duplicate delivery groups so you can specify multiple brokers incase one goes down.
                 Write-Verbose -Message "Add $($DeliveryGroup.Name)"
                 $DeliveryGroupObject = [PSCustomObject]@{
-                    MachineName         = ""
-                    DNSName             = ""
-                    Name                = $DeliveryGroup.Name
-                    Site                = $CTXSite.Name
-                    Broker              = $adminAddr
+                        MachineName         = ""
+                        DNSName             = ""
+                        Name                = $DeliveryGroup.Name
+                        Site                = $CTXSite.Name
+                        Broker              = $adminAddr
+                    }
+                    $DeliveryGroups.Add($DeliveryGroupObject)
+            } else {
+                if (-not($DeliveryGroups.Name.Contains($DeliveryGroup.Name))) {  #ensures we don't add duplicate delivery groups so you can specify multiple brokers incase one goes down.
+                    Write-Verbose -Message "Add $($DeliveryGroup.Name)"
+                    $DeliveryGroupObject = [PSCustomObject]@{
+                        MachineName         = ""
+                        DNSName             = ""
+                        Name                = $DeliveryGroup.Name
+                        Site                = $CTXSite.Name
+                        Broker              = $adminAddr
+                    }
+                    $DeliveryGroups.Add($DeliveryGroupObject)
                 }
-                $DeliveryGroups.Add($DeliveryGroupObject)
             }
         }
-    }
 
-    Write-Verbose -Message "Querying $adminAddr for Broker Machines"
-    foreach ($BrokerMachine in Get-BrokerController -AdminAddress $adminAddr) {
-        if ($BrokerMachines.Count -eq 0) {
-            $BrokerMachineObject = [PSCustomObject]@{
-                    MachineName         = $BrokerMachine.MachineName
-                    DNSName             = $BrokerMachine.DNSName
-                    Name                = ""
-                    Site                = $CTXSite.Name
-                    Broker              = $adminAddr
-                }
-                $BrokerMachines.Add($BrokerMachineObject)
-        } else {
-            if (-not($BrokerMachines.MachineName.Contains($BrokerMachine.MachineName))) {  #ensures we don't add duplicate broker machines so you can specify multiple brokers incase one goes down.
-                Write-Verbose -Message "Add $($BrokerMachine.MachineName)"
+        Write-Verbose -Message "Querying $adminAddr for Broker Machines"
+        foreach ($BrokerMachine in Get-BrokerController -AdminAddress $adminAddr) {
+            if ($BrokerMachines.Count -eq 0) {
                 $BrokerMachineObject = [PSCustomObject]@{
-                    MachineName         = $BrokerMachine.MachineName
-                    DNSName             = $BrokerMachine.DNSName
-                    Name                = ""
-                    Site                = $CTXSite.Name
-                    Broker              = $adminAddr
+                        MachineName         = $BrokerMachine.MachineName
+                        DNSName             = $BrokerMachine.DNSName
+                        Name                = ""
+                        Site                = $CTXSite.Name
+                        Broker              = $adminAddr
+                    }
+                    $BrokerMachines.Add($BrokerMachineObject)
+            } else {
+                if (-not($BrokerMachines.MachineName.Contains($BrokerMachine.MachineName))) {  #ensures we don't add duplicate broker machines so you can specify multiple brokers incase one goes down.
+                    Write-Verbose -Message "Add $($BrokerMachine.MachineName)"
+                    $BrokerMachineObject = [PSCustomObject]@{
+                        MachineName         = $BrokerMachine.MachineName
+                        DNSName             = $BrokerMachine.DNSName
+                        Name                = ""
+                        Site                = $CTXSite.Name
+                        Broker              = $adminAddr
+                    }
+                    $BrokerMachines.Add($BrokerMachineObject)
                 }
-                $BrokerMachines.Add($BrokerMachineObject)
             }
         }
     }
+}
+catch
+{
+    Write-CULog -Msg $_ -ShowConsole -Type E
+    Send-EmailAlert -SmtpServer $SmtpServer -from $emailFrom -to $emailTo -useSSL:$emailUseSSL -subject "Fatal error from ControlUp sync script `"$thisScript`" on $env:COMPUTERNAME" -body $_
 }
 
 Write-Host "Total Number of Delivery Groups : $($DeliveryGroups.Count)"
@@ -411,6 +460,22 @@ if ($batchCreateFolders){
 
 if ($Force){
     $BuildCUTreeParams.Add("Force",$true)
+}
+
+if ($SmtpServer){
+    $BuildCUTreeParams.Add("SmtpServer",$SmtpServer)
+}
+
+if ($emailFrom){
+    $BuildCUTreeParams.Add("emailFrom",$emailFrom)
+}
+
+if ($emailTo){
+    $BuildCUTreeParams.Add("emailTo",$emailTo)
+}
+
+if ($emailUseSSL){
+    $BuildCUTreeParams.Add("emailUseSSL",$emailUseSSL)
 }
 
 [int]$errorCount = Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams

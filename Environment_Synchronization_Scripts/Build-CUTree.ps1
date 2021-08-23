@@ -17,6 +17,9 @@
         @guyrleech 2020-12-20   Reorganised help comment block to be get-help compatible for script and function
         @guyrleech 2021-02-11   Change SiteId to SiteName and errors if does not exist. Added batch folder warning as can cause issues
         @guyrleech 2021-02-12   Added delay between each folder add when a large number being added
+        @guyrleech 2021-07-29   Added more logging to log file. Added email notification
+        @guyrleech 2021-08-13   Added checking and more logging for CU Monitor service state
+        @guyrleech 2021-08-16   Changed service checking as was causing access denied errors
 #>
 
 <#
@@ -173,7 +176,7 @@ function Build-CUTree {
         [Parameter(Mandatory=$false, HelpMessage='Save a log file' )]
 	    [string] $LogFile,
 
-        [Parameter(Mandatory=$false, HelpMessage='ControlUp Site Name to assign the machine object to' )]
+        [Parameter(Mandatory=$false, HelpMessage='ControlUp Site name to assign the machine object to' )]
 	    [string] $SiteName,
 
         [Parameter(Mandatory=$false, HelpMessage='Debug CU Machine Environment Objects' )]
@@ -190,6 +193,18 @@ function Build-CUTree {
         
         [Parameter(Mandatory=$false, HelpMessage='Force creation of folders if -batchCountWarning size exceeded' )]
         [switch] $force ,
+        
+        [Parameter(Mandatory=$false, HelpMessage='Smtp server to send alert emails from' )]
+	    [string] $SmtpServer ,
+
+        [Parameter(Mandatory=$false, HelpMessage='Email address to send alert email from' )]
+	    [string] $emailFrom ,
+
+        [Parameter(Mandatory=$false, HelpMessage='Email addresses to send alert email to' )]
+	    [string[]] $emailTo ,
+
+        [Parameter(Mandatory=$false, HelpMessage='Use SSL to send email alert' )]
+	    [switch] $emailUseSSL ,
 
         [Parameter(Mandatory=$false, HelpMessage='Delay between each folder creation when count exceeds -batchCountWarning' )]
         [double] $folderCreateDelaySeconds = 0.5
@@ -202,86 +217,11 @@ function Build-CUTree {
         #This variable sets the maximum batch size to apply the changes in ControlUp. It is not recommended making it bigger than 100
         $maxFolderBatchSize = 100
         [int]$errorCount = 0
-
-        function Write-CULog {
-            <#
-            .SYNOPSIS
-	            Write the Logfile
-            .DESCRIPTION
-	            Helper Function to Write Log Messages to Console Output and corresponding Logfile
-	            use get-help <functionname> -full to see full help
-            .EXAMPLE
-	            Write-CULog -Msg "Warining Text" -Type W
-            .EXAMPLE
-	            Write-CULog -Msg "Text would be shown on Console" -ShowConsole
-            .EXAMPLE
-	            Write-CULog -Msg "Text would be shown on Console in Cyan Color, information status" -ShowConsole -Color Cyan
-            .EXAMPLE
-	            Write-CULog -Msg "Error text, script would be existing automaticaly after this message" -Type E
-            .EXAMPLE
-	            Write-CULog -Msg "External log contenct" -Type L
-            .NOTES
-	            Author: Matthias Schlimm
-	            Company:  EUCWeb.com
-	            History:
-	            dd.mm.yyyy MS: function created
-	            07.09.2015 MS: add .SYNOPSIS to this function
-	            29.09.2015 MS: add switch -SubMSg to define PreMsg string on each console line
-	            21.11.2017 MS: if Error appears, exit script with Exit 1
-                08.07.2020 TT: Borrowed Write-BISFLog and modified to meet the purpose for this script
-            .LINK
-	            https://eucweb.com
-            #>
-
-            Param(
-	            [Parameter(Mandatory = $True)][Alias('M')][String]$Msg,
-	            [Parameter(Mandatory = $False)][Alias('S')][switch]$ShowConsole,
-	            [Parameter(Mandatory = $False)][Alias('C')][String]$Color = "",
-	            [Parameter(Mandatory = $False)][Alias('T')][String]$Type = "",
-	            [Parameter(Mandatory = $False)][Alias('B')][switch]$SubMsg
-            )
-    
-            $LogType = "INFORMATION..."
-            IF ($Type -eq "W" ) { $LogType = "WARNING........."; $Color = "Yellow" }
-            IF ($Type -eq "E" ) { $LogType = "ERROR..............."; $Color = "Red" }
-
-            IF (!($SubMsg)) {
-	            $PreMsg = "+"
-            }
-            ELSE {
-	            $PreMsg = "`t>"
-            }
-        
-            $date = Get-Date -Format G
-            if ($Global:LogFile) {
-                Write-Output "$date | $LogType | $Msg"  | Out-file $($Global:LogFile) -Append
-            }
-            
-
-            If (!($ShowConsole)) {
-	            IF (($Type -eq "W") -or ($Type -eq "E" )) {
-		            #IF ($VerbosePreference -eq 'SilentlyContinue') {
-			            Write-Host "$PreMsg $Msg" -ForegroundColor $Color
-			            $Color = $null
-		            #}
-	            }
-	            ELSE {
-		            Write-Verbose -Message "$PreMsg $Msg"
-		            $Color = $null
-	            }
-
-            }
-            ELSE {
-	            if ($Color -ne "") {
-		            #IF ($VerbosePreference -eq 'SilentlyContinue') {
-			            Write-Host "$PreMsg $Msg" -ForegroundColor $Color
-			            $Color = $null
-		            #}
-	            }
-	            else {
-		            Write-Host "$PreMsg $Msg"
-	            }
-            }
+        [array]$stack = @( Get-PSCallStack )
+        [string]$callingScript = $stack.Where( { $_.ScriptName -ne $stack[0].ScriptName } ) | Select-Object -First 1 -ExpandProperty ScriptName
+        if( ! $callingScript -and ! ( $callingScript = $stack | Select-Object -First 1 -ExpandProperty ScriptName ) )
+        {
+            $callingScript = $stack[-1].Position ## if no script name then use this which should give us the full command line used to invoke the script
         }
 
         function Execute-PublishCUUpdates {
@@ -368,53 +308,71 @@ function Build-CUTree {
 
     Process {
         $startTime = Get-Date
+        [string]$errorMessage = $null
 
         #region Load ControlUp PS Module
-        try {
+        try
+        {
             ## Check CU monitor is installed and at least minimum required version
             [string]$cuMonitor = 'ControlUp Monitor'
             [string]$cuDll = 'ControlUp.PowerShell.User.dll'
+            [string]$cuMonitorProcessName = 'CUmonitor'
             [version]$minimumCUmonitorVersion = '8.1.5.600'
             if( ! ( $installKey = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -Name DisplayName -ErrorAction SilentlyContinue| Where-Object DisplayName -eq $cuMonitor ) )
             {
-                Write-Warning -Message "$cuMonitor does not appear to be installed"
+                Write-CULog -ShowConsole -Type W -Msg "$cuMonitor does not appear to be installed"
             }
- 
+            ## when running via scheduled task we do not have sufficient rights to query services
+            if( ! ( $cuMonitorProcess = Get-Process -Name $cuMonitorProcessName -ErrorAction SilentlyContinue ) )
+            {
+                Write-CULog -ShowConsole -Type W -Msg "Unable to find process $cuMonitorProcessName for $cuMonitor service" ## pid $($cuMonitorService.ProcessId)"
+            }
+            else
+            {
+                [string]$message =  "$cuMonitor service running as pid $($cuMonitorProcess.Id)"
+                ## if not running as admin/elevated then won't be able to get start time
+                if( $cuMonitorProcess.StartTime )
+                {
+                    $message += ", started at $(Get-Date -Date $cuMonitorProcess.StartTime -Format G)"
+                }
+                Write-CULog -Msg $message
+            }
+
 	        # Importing the latest ControlUp PowerShell Module - need to find path for dll which will be where cumonitor is running from. Don't use Get-Process as may not be elevated so would fail to get path to exe and win32_service fails as scheduled task with access denied
-            if( ! ( $cuMonitorServicePath = ( Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\cuMonitor' -Name ImagePath -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ImagePath ).Trim( '"' ) ) )
+            if( ! ( $cuMonitorServicePath = ( Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\cuMonitor' -Name ImagePath -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ImagePath ) ) )
             {
-                Write-Error -Message "$cuMonitor service path not found in registry"
-                break
+                Throw "$cuMonitor service path not found in registry"
             }
-            elseif( ! ( $cuMonitorProperties = Get-ItemProperty -Path $cuMonitorServicePath -ErrorAction SilentlyContinue) )
+            elseif( ! ( $cuMonitorProperties = Get-ItemProperty -Path $cuMonitorServicePath.Trim( '"' ) -ErrorAction SilentlyContinue) )
             {
-                Write-Error -Message "Unable to find CUmonitor service at $cuMonitorServicePath"
-                break
+                Throw  "Unable to find CUmonitor service at $cuMonitorServicePath"
             }
             elseif( $cuMonitorProperties.VersionInfo.FileVersion -lt $minimumCUmonitorVersion )
             {
-                Write-Error -Message "Found version $($cuMonitorProperties.VersionInfo.FileVersion) of cuMonitor.exe but need at least $($minimumCUmonitorVersion.ToString())"
-                break
+                Throw "Found version $($cuMonitorProperties.VersionInfo.FileVersion) of cuMonitor.exe but need at least $($minimumCUmonitorVersion.ToString())"
             }
-            elseif( ! ( $pathtomodule = Join-Path -Path (Split-Path -Path $cuMonitorServicePath -Parent) -ChildPath $cuDll ) )
+            elseif( ! ( $pathtomodule = Join-Path -Path (Split-Path -Path $cuMonitorServicePath.Trim( '"' ) -Parent) -ChildPath $cuDll ) )
             {
-                Write-Error -Message "Unable to find $cuDll in `"$pathtomodule`""
-                break
+                Throw "Unable to find $cuDll in `"$pathtomodule`""
             }
 	        elseif( ! ( Import-Module $pathtomodule -PassThru ) )
             {
-                break
+                Throw "Failed to import module from `"$pathtomodule`""
             }
             elseif( ! ( Get-Command -Name 'Get-CUFolders' -ErrorAction SilentlyContinue ) )
             {
-                Write-Error -Message "Loaded CU Monitor PowerShell module but unable to find cmdlet Get-CUFolders"
-                break
+                Throw "Loaded CU Monitor PowerShell module from `"$pathtomodule`" but unable to find cmdlet Get-CUFolders"
             }
         }
-        catch {
-            Write-CULog -Msg $_ -ShowConsole -Type E
+        catch
+        {
+            $exception = $_
+            Write-CULog -Msg $exception -ShowConsole -Type E
+            Write-CULog -Msg (Get-PSCallStack|Format-Table)
             Write-CULog -Msg 'The required ControlUp PowerShell module was not found or could not be loaded. Please make sure this is a ControlUp Monitor machine.' -ShowConsole -Type E
+            Send-EmailAlert -SmtpServer $SmtpServer -from $emailFrom -to $emailTo -useSSL:$emailUseSSL -subject "Fatal error from ControlUp sync script `"$callingScript`" on $env:COMPUTERNAME" -body "$exception"
             $errorCount++
+            break
         }
         #endregion
 
@@ -427,7 +385,10 @@ function Build-CUTree {
             [array]$cusites = @( Get-CUSites )
             if( ! ( $SiteIdGUID = $cusites | Where-Object { $_.Name -eq $SiteName } | Select-Object -ExpandProperty Id ) -or ( $SiteIdGUID -is [array] -and $SiteIdGUID.Count -gt 1 ) )
             {
-                Write-CULog -Msg "No unique ControlUp site `"$SiteName`" found (the $($cusites.Count) sites are: $(($cusites | Select-Object -ExpandProperty Name) -join ' , ' ))" -ShowConsole -Type E
+                $errorMessage = "No unique ControlUp site `"$SiteName`" found (the $($cusites.Count) sites are: $(($cusites | Select-Object -ExpandProperty Name) -join ' , ' ))"
+                Write-CULog -Msg $errorMessage -ShowConsole -Type E
+                Send-EmailAlert -SmtpServer $SmtpServer -from $emailFrom -to $emailTo -useSSL:$emailUseSSL -subject "Fatal error from ControlUp sync script `"$callingScript`" on $env:COMPUTERNAME" -body "$exception"
+                $errorCount++
                 break
             }
             else
@@ -442,7 +403,10 @@ function Build-CUTree {
             try {
                 $CUComputers = Get-CUComputers # add a filter on path so only computers within the $rootfolder are used
             } catch {
-                Write-Error "Unable to get computers from ControlUp"
+                $errorMessage = "Unable to get computers from ControlUp: $_" 
+                Write-CULog -Msg $errorMessage -ShowConsole -Type E
+                Send-EmailAlert -SmtpServer $SmtpServer -from $emailFrom -to $emailTo -useSSL:$emailUseSSL -subject "Fatal error from ControlUp sync script `"$callingScript`" on $env:COMPUTERNAME" -body "$errorMessage"
+                $errorCount++
                 break
             }
         } else {
@@ -471,7 +435,10 @@ function Build-CUTree {
             try {
                 $CUFolders   = Get-CUFolders # add a filter on path so only folders within the rootfolder are used
             } catch {
-                Write-Error "Unable to get folders from ControlUp"
+                $errorMessage = "Unable to get folders from ControlUp: $_"
+                Write-CULog -Msg $errorMessage  -ShowConsole -Type E
+                Send-EmailAlert -SmtpServer $SmtpServer -from $emailFrom -to $emailTo -useSSL:$emailUseSSL -subject "Fatal error from ControlUp sync script `"$callingScript`" on $env:COMPUTERNAME" -body "$errorMessage"
+                $errorCount++
                 break
             }
         } else {
@@ -602,7 +569,10 @@ function Build-CUTree {
                 }
                 else
                 {
-                    Write-CULog -Msg "$logText, aborting - use -force to override" -ShowConsole -Type E
+                    $errorMessage = "$logText, aborting - use -force to override" 
+                    Write-CULog -Msg $errorMessage -ShowConsole -Type E
+                    Send-EmailAlert -SmtpServer $SmtpServer -from $emailFrom -to $emailTo -useSSL:$emailUseSSL -subject "Fatal error from ControlUp sync script `"$callingScript`" on $env:COMPUTERNAME" -body "$errorMessage"
+                    $errorCount++
                     break
                 }
             }
@@ -832,4 +802,135 @@ function Build-CUTree {
 
         return $errorCount
     }
+}
+
+function Write-CULog {
+    <#
+    .SYNOPSIS
+	    Write the Logfile
+    .DESCRIPTION
+	    Helper Function to Write Log Messages to Console Output and corresponding Logfile
+	    use get-help <functionname> -full to see full help
+    .EXAMPLE
+	    Write-CULog -Msg "Warining Text" -Type W
+    .EXAMPLE
+	    Write-CULog -Msg "Text would be shown on Console" -ShowConsole
+    .EXAMPLE
+	    Write-CULog -Msg "Text would be shown on Console in Cyan Color, information status" -ShowConsole -Color Cyan
+    .EXAMPLE
+	    Write-CULog -Msg "Error text, script would be existing automaticaly after this message" -Type E
+    .EXAMPLE
+	    Write-CULog -Msg "External log contenct" -Type L
+    .NOTES
+	    Author: Matthias Schlimm
+	    Company:  EUCWeb.com
+	    History:
+	    dd.mm.yyyy MS: function created
+	    07.09.2015 MS: add .SYNOPSIS to this function
+	    29.09.2015 MS: add switch -SubMSg to define PreMsg string on each console line
+	    21.11.2017 MS: if Error appears, exit script with Exit 1
+        08.07.2020 TT: Borrowed Write-BISFLog and modified to meet the purpose for this script
+    .LINK
+	    https://eucweb.com
+    #>
+
+    Param(
+	    [Parameter(Mandatory = $True)][Alias('M')][String]$Msg,
+	    [Parameter(Mandatory = $False)][Alias('S')][switch]$ShowConsole,
+	    [Parameter(Mandatory = $False)][Alias('C')][String]$Color = "",
+	    [Parameter(Mandatory = $False)][Alias('T')][String]$Type = "",
+	    [Parameter(Mandatory = $False)][Alias('B')][switch]$SubMsg
+    )
+    
+    $LogType = "INFORMATION..."
+    IF ($Type -eq "W" ) { $LogType = "WARNING........."; $Color = "Yellow" }
+    IF ($Type -eq "E" ) { $LogType = "ERROR..............."; $Color = "Red" }
+
+    IF (!($SubMsg)) {
+	    $PreMsg = "+"
+    }
+    ELSE {
+	    $PreMsg = "`t>"
+    }
+        
+    $date = Get-Date -Format G
+    if ($Global:LogFile) {
+        Write-Output "$date | $LogType | $Msg"  | Out-file $($Global:LogFile) -Append
+    }
+            
+
+    If (!($ShowConsole)) {
+	    IF (($Type -eq "W") -or ($Type -eq "E" )) {
+		    #IF ($VerbosePreference -eq 'SilentlyContinue') {
+			    Write-Host "$PreMsg $Msg" -ForegroundColor $Color
+			    $Color = $null
+		    #}
+	    }
+	    ELSE {
+		    Write-Verbose -Message "$PreMsg $Msg"
+		    $Color = $null
+	    }
+
+    }
+    ELSE {
+	    if ($Color -ne "") {
+		    #IF ($VerbosePreference -eq 'SilentlyContinue') {
+			    Write-Host "$PreMsg $Msg" -ForegroundColor $Color
+			    $Color = $null
+		    #}
+	    }
+	    else {
+		    Write-Host "$PreMsg $Msg"
+	    }
+    }
+}
+
+Function Send-EmailAlert
+{
+    [CmdletBinding()]
+
+    Param
+    (
+        [Parameter(Mandatory=$false, HelpMessage='Smtp server to send emails from' )]
+	    [string] $SmtpServer ,
+
+        [Parameter(Mandatory=$false, HelpMessage='Email address to send email from' )]
+	    [string] $from ,
+
+        [Parameter(Mandatory=$false, HelpMessage='Email addresses to send email to' )]
+	    [string[]] $to ,
+
+        [Parameter(Mandatory=$false, HelpMessage='Body of email' )]
+	    [string] $body ,
+
+        [Parameter(Mandatory=$false, HelpMessage='Subject of email' )]
+	    [string] $subject ,
+
+        [Parameter(Mandatory=$false, HelpMessage='Use SSL to send email alert' )]
+	    [switch] $useSSL
+    )
+
+    if( [string]::IsNullOrEmpty( $SmtpServer ) -or [string]::IsNullOrEmpty( $to ) )
+    {
+        return $null ## don't check if set at caller end to make code sleaker
+    }
+
+    [int]$port = 25
+    [string[]]$serverParts = @( $SmtpServer -split ':' )
+    if( $serverParts.Count -gt 1 )
+    {
+        $port = $serverParts[-1]
+    }
+
+    if( $to -and $to.Count -eq 1 -and $to[0].IndexOf( ',' ) -ge 0 )
+    {
+        $to = @( $to -split ',' )
+    }
+
+    if( [string]::IsNullOrEmpty( $from ) )
+    {
+        $from = "$env:COMPUTERNAME@$env:USERDNSDOMAIN"
+    }
+
+    Send-MailMessage -SmtpServer $serverParts[0] -Port $port -UseSsl:$useSSL -Body $body -Subject $subject -From $from -to $to
 }
