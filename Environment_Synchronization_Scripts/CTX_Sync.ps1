@@ -242,16 +242,29 @@ if( $enabledOnly )
     $brokerParameters.Add( 'Enabled' , $true )
 }
 
-Try
-{
-    foreach ($adminAddr in $brokers) {
-        $brokerParameters.AdminAddress = $adminAddr
-        $CTXSite = Get-BrokerSite -AdminAddress $adminAddr
-        $CTXSites.Add($CTXSite)
-        Write-Verbose -Message "Querying $adminAddr for Delivery Groups"
-        #Get list of Delivery Groups
-        foreach ($DeliveryGroup in $(Get-BrokerDesktopGroup @brokerParameters)) {
-            if ($DeliveryGroups.Count -eq 0) {
+if ($brokers.count -eq 1 -and $brokers[0].IndexOf(',') -ge 0) {
+    $brokers = $brokers -split ','
+}
+Try {
+  foreach ($adminAddr in $brokers) {
+    $brokerParameters.AdminAddress = $adminAddr
+    $CTXSite = Get-BrokerSite -AdminAddress $adminAddr
+    $CTXSites.Add($CTXSite)
+    Write-Verbose -Message "Querying $adminAddr for Delivery Groups"
+    #Get list of Delivery Groups
+    foreach ($DeliveryGroup in $(Get-BrokerDesktopGroup @brokerParameters)) {
+        if ($DeliveryGroups.Count -eq 0) {
+            $DeliveryGroupObject = [PSCustomObject]@{
+                    MachineName         = ""
+                    DNSName             = ""
+                    Name                = $DeliveryGroup.Name
+                    Site                = $CTXSite.Name
+                    Broker              = $adminAddr
+                }
+                $DeliveryGroups.Add($DeliveryGroupObject)
+        } else {
+            if (-not($DeliveryGroups.Name.Contains($DeliveryGroup.Name))) {  #ensures we don't add duplicate delivery groups so you can specify multiple brokers incase one goes down.
+                Write-Verbose -Message "Add $($DeliveryGroup.Name)"
                 $DeliveryGroupObject = [PSCustomObject]@{
                         MachineName         = ""
                         DNSName             = ""

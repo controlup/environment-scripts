@@ -75,7 +75,11 @@
     Guy Leech,              2020-11-05 - Added -batchCreateFolders option to create folders in batches (faster) otherwise creates them one at a time
     Wouter Kursten          2021-01-21 - Updates Synopsis
     Guy Leech,              2021-02-12 - Added -force for when large number of folders to add
+    Wouter Kursten          2021-03-17 - Re-Added renaming of localhvsiteonly to localhvpodonly
     Guy Leech,              2021-07-29 - Added email alerting
+
+
+
 
 .LINK
 
@@ -89,6 +93,8 @@
     Creation Date:  2020-08-06
     Updated:        2020-08-06
                     Changed ...
+    Updated:        2021-03-17
+
     Purpose:        Created for VMware Horizon Sync
 #>
 
@@ -114,7 +120,7 @@ Param
     [string] $LogFile,
 
     [Parameter(Mandatory=$false, HelpMessage='Synchronise the local site only' )]
-    [switch] $LocalHVSiteOnly,
+    [switch] $LocalHVPodOnly,
 
     [Parameter(Mandatory=$false,  HelpMessage='Enter a ControlUp Site name')]
     [ValidateNotNullOrEmpty()]
@@ -123,7 +129,7 @@ Param
     [Parameter(Mandatory=$false, HelpMessage='File with a list of exceptions, machine names and/or desktop pools' )]
     [ValidateNotNullOrEmpty()]
     [string] $Exceptionsfile ,
-    
+
     [Parameter(Mandatory=$false, HelpMessage='Create folders in batches rather than individually')]
 	[switch] $batchCreateFolders ,
 
@@ -160,14 +166,6 @@ $ProgressPreference = 'SilentlyContinue'
 [string]$buildCuTreeScriptPath = [System.IO.Path]::Combine( $scriptPath , $buildCuTreeScript )
 [string]$errorMessage = $null
 
-if( ! ( Test-Path -Path $buildCuTreeScriptPath -PathType Leaf -ErrorAction SilentlyContinue ) )
-{
-    [string]$errorMessage = "Unable to find script `"$buildCuTreeScript`" in `"$scriptPath`""
-    Write-CULog -Msg $errorMessage -ShowConsole -Type E
-    Throw $errorMessage
-}
-
-. $buildCuTreeScriptPath
 
 function Make-NameWithSafeCharacters ([string]$string) {
     ###### TODO need to replace the folder path characters that might be illegal
@@ -474,6 +472,15 @@ function Write-CULog {
     }
 }
 
+if( ! ( Test-Path -Path $buildCuTreeScriptPath -PathType Leaf -ErrorAction SilentlyContinue ) )
+{
+    [string]$errorMessage = "Unable to find script `"$buildCuTreeScript`" in `"$scriptPath`""
+    Write-CULog -Msg $errorMessage -ShowConsole -Type E
+    Throw $errorMessage
+}
+
+. $buildCuTreeScriptPath
+
 # Set the credentials location
 [string]$strCUCredFolder = "$([environment]::GetFolderPath( [Environment+SpecialFolder]::CommonApplicationData ))\ControlUp\ScriptSupport"
 
@@ -580,7 +587,7 @@ foreach ($hvconnectionserver in $hvconnectionservers){
         [string]$targetfolderpath=""
     }
     # Get the Horizon View desktop Pools
-    [array]$HVPools = @( Get-HVDesktopPools -HVConnectionServer $objHVConnectionServer )
+    [array]$HVPools = Get-HVDesktopPools -HVConnectionServer $objHVConnectionServer
     
 
     if($NULL -ne $hvpools){
