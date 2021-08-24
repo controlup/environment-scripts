@@ -368,7 +368,7 @@ function Build-CUTree {
         {
             $exception = $_
             Write-CULog -Msg $exception -ShowConsole -Type E
-            Write-CULog -Msg (Get-PSCallStack|Format-Table)
+            ##Write-CULog -Msg (Get-PSCallStack|Format-Table)
             Write-CULog -Msg 'The required ControlUp PowerShell module was not found or could not be loaded. Please make sure this is a ControlUp Monitor machine.' -ShowConsole -Type E
             Send-EmailAlert -SmtpServer $SmtpServer -from $emailFrom -to $emailTo -useSSL:$emailUseSSL -subject "Fatal error from ControlUp sync script `"$callingScript`" on $env:COMPUTERNAME" -body "$exception"
             $errorCount++
