@@ -95,6 +95,9 @@
     Guy Leech,            2020-11-02 - Added -batchCreateFolders option to create folders in batches (faster) otherwise creates them one at a time
     Guy Leech,            2021-02-12 - Added -force for when large number of folders to add
     Guy Leech,            2021-07-30 - Added email alerting and writing to logfile
+    Guy Leech,            2021-08-20 - Fixed issue where dash in Citrix site name caused 2 different folders to be created
+    Guy Leech,            2021-08-25 - Fixed manual merge errors and possible flattening of delivery group include and exclude arrays. Errors if no objects to sync found.
+                                       Extra logging for inclusions, exclusions and module import failures
 
 .LINK
 
@@ -175,7 +178,7 @@ $DebugPreference = $(if( $PSBoundParameters[ 'debug' ] ) { $DebugPreference } el
 $ErrorActionPreference = $(if( $PSBoundParameters[ 'erroraction' ] ) { $ErrorActionPreference } else { 'Stop' })
 $ProgressPreference = 'SilentlyContinue'
 
-$Global:LogFile = $PSBoundParameters.LogFile
+##$Global:LogFile = $PSBoundParameters.LogFile
 
 ## Script from ControlUp which must reside in the same folder as this script
 [string]$buildCuTreeScript = 'Build-CUTree.ps1'
@@ -227,6 +230,7 @@ if( ! (  Import-Module -Name Citrix.DelegatedAdmin.Commands -ErrorAction Silentl
     -and ! ( Add-PSSnapin -Name Citrix.Broker.Admin.* -ErrorAction SilentlyContinue -PassThru -Verbose:$false) )
 {
     $errorMessage = 'Failed to load Citrix PowerShell cmdlets - is this a Delivery Controller or have Studio or the PowerShell SDK installed ?'
+    Write-CULog -Msg $errorMessage -ShowConsole
     Send-EmailAlert -SmtpServer $SmtpServer -from $emailFrom -to $emailTo -useSSL:$emailUseSSL -subject "Fatal error from ControlUp sync script `"$thisScript`" on $env:COMPUTERNAME" -body "$errorMessage"
     Throw $errorMessage
 }
@@ -243,28 +247,18 @@ if( $enabledOnly )
 }
 
 if ($brokers.count -eq 1 -and $brokers[0].IndexOf(',') -ge 0) {
-    $brokers = $brokers -split ','
+    $brokers = @( $brokers -split ',' )
 }
+
 Try {
-  foreach ($adminAddr in $brokers) {
-    $brokerParameters.AdminAddress = $adminAddr
-    $CTXSite = Get-BrokerSite -AdminAddress $adminAddr
-    $CTXSites.Add($CTXSite)
-    Write-Verbose -Message "Querying $adminAddr for Delivery Groups"
-    #Get list of Delivery Groups
-    foreach ($DeliveryGroup in $(Get-BrokerDesktopGroup @brokerParameters)) {
-        if ($DeliveryGroups.Count -eq 0) {
-            $DeliveryGroupObject = [PSCustomObject]@{
-                    MachineName         = ""
-                    DNSName             = ""
-                    Name                = $DeliveryGroup.Name
-                    Site                = $CTXSite.Name
-                    Broker              = $adminAddr
-                }
-                $DeliveryGroups.Add($DeliveryGroupObject)
-        } else {
-            if (-not($DeliveryGroups.Name.Contains($DeliveryGroup.Name))) {  #ensures we don't add duplicate delivery groups so you can specify multiple brokers incase one goes down.
-                Write-Verbose -Message "Add $($DeliveryGroup.Name)"
+    foreach ($adminAddr in $brokers) {
+        $brokerParameters.AdminAddress = $adminAddr
+        $CTXSite = Get-BrokerSite -AdminAddress $adminAddr
+        $CTXSites.Add($CTXSite)
+        Write-Verbose -Message "Querying $adminAddr for Delivery Groups"
+        #Get list of Delivery Groups
+        foreach ($DeliveryGroup in $(Get-BrokerDesktopGroup @brokerParameters)) {
+            if ($DeliveryGroups.Count -eq 0) {
                 $DeliveryGroupObject = [PSCustomObject]@{
                         MachineName         = ""
                         DNSName             = ""
@@ -327,11 +321,18 @@ Write-Host "Total Number of Sites           : $($($($CTXSites.Name | Sort-Object
 
 #Add Included Delivery Groups
 if ($PSBoundParameters.ContainsKey("includeDeliveryGroup")) {
+
+    if ($includeDeliveryGroup.count -eq 1 -and $includeDeliveryGroup[0].IndexOf(',') -ge 0) {
+        $includeDeliveryGroup = @( $includeDeliveryGroup -split ',' )
+    }
+
     $DeliveryGroupsInclusionList = New-Object System.Collections.Generic.List[PSObject]
     foreach ($DeliveryGroupInclusion in $includeDeliveryGroup) {
         foreach ($DeliveryGroup in $DeliveryGroups) {
             if ($DeliveryGroup.Name -like $DeliveryGroupInclusion) {
-            Write-Verbose -Message "Including DG $($DeliveryGroup.Name) - reason: $DeliveryGroupInclusion"
+                [string]$message = "Including delivery group: $($DeliveryGroup.Name) - because: $DeliveryGroupInclusion"
+                Write-CULog -Msg $message -ShowConsole
+                Write-Verbose -Message $message
                 $DeliveryGroupsInclusionList.Add($DeliveryGroup)
             }
         }
@@ -343,11 +344,17 @@ if ($PSBoundParameters.ContainsKey("includeDeliveryGroup")) {
 
 #Remove Excluded Delivery Groups
 if ($PSBoundParameters.ContainsKey("excludeDeliveryGroup")) {
+    if ($excludeDeliveryGroup.count -eq 1 -and $excludeDeliveryGroup[0].IndexOf(',') -ge 0) {
+        $excludeDeliveryGroup = @( $excludeDeliveryGroup -split ',' )
+    }
+
     $IndexesToRemove = New-Object System.Collections.Generic.List[PSObject]
     foreach ($DeliveryGroup in $DeliveryGroups) {
         foreach ($exclusion in $excludeDeliveryGroup) {
             if ($DeliveryGroup.Name -like $exclusion) {
-                Write-Verbose "Excluding: $($DeliveryGroup.Name)  - because: $exclusion"
+                [string]$message = "Excluding delivery group: $($DeliveryGroup.Name)  - because: $exclusion"
+                Write-CULog -Msg $message -ShowConsole
+                Write-Verbose -Message $message
                 $IndexesToRemove.add($DeliveryGroups.IndexOf($DeliveryGroup))
             }
         }
@@ -419,7 +426,8 @@ if ($MatchEUCEnvTree) {
             $BrokerObj = $BrokerMachines | Where-Object ({$_.MachineName.split("\")[1] -eq $ControlUpEnvironmentObject[$i].Name})
             $ControlUpEnvironmentObject[$i].FolderPath = "$($BrokerObj.Site)\$($ControlUpEnvironmentObject[$i].FolderPath)" #Sets the path to $SiteName\Brokers
         } else {
-            $ControlUpEnvironmentObject[$i].FolderPath = "$($ControlUpEnvironmentObject[$i].Description.Split("-")[0])\Delivery Groups\$($ControlUpEnvironmentObject[$i].FolderPath)"
+            ## changed 2021/08/20 GRL as was splitting on dash which meant it broke environments where the Citrix site had a dash in the name
+            $ControlUpEnvironmentObject[$i].FolderPath = "$($ControlUpEnvironmentObject[$i].Description -replace '\-(DeliveryGroup|Machine)$')\Delivery Groups\$($ControlUpEnvironmentObject[$i].FolderPath)"
         }
     }
     if ($addBrokersToControlUp) {
@@ -478,6 +486,17 @@ if ($emailUseSSL){
     $BuildCUTreeParams.Add("emailUseSSL",$emailUseSSL)
 }
 
-[int]$errorCount = Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams
+[int]$errorCount = 1
+
+if( $null -eq $ControlUpEnvironmentObject -or $ControlUpEnvironmentObject.Count -eq 0 )
+{
+    $errorMessage = "No Citrix on-premises objects found to sync with ControlUp from brokers $($Brokers -join ,',')"
+    Write-CULog -Msg $errorMessage -ShowConsole -Type E
+    Send-EmailAlert -SmtpServer $SmtpServer -from $emailFrom -to $emailTo -useSSL:$emailUseSSL -subject "Fatal error from ControlUp sync script `"$thisScript`" on $env:COMPUTERNAME" -body $errorMessage
+}
+else
+{
+    $errorCount = Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams
+}
 
 Exit $errorCount
