@@ -1,3 +1,5 @@
+﻿#requires -version 3
+
 <#
 .SYNOPSIS
     Creates the folder structure and adds/removes or moves machines into the structure.
@@ -20,27 +22,14 @@
 .PARAMETER Site
     Specify a ControlUp Monitor Site to assign the objects.
 
-.PARAMETER Connection_servers
-    A list of Connection Servers to contact for Horizon Pools,Farms and Computers to sync. Multiple Connection Servers can be specified if seperated by commas.
+.PARAMETER HVConnectionServerFQDN
+    Connection server fqdn  to contact for Horizon Pools,Farms and Computers to sync. Multiple Connection Servers can be specified if seperated by commas.
 
-.PARAMETER includeDesktopPools
-    Include only these specific Delivery Groups to be added to the ControlUp tree. Wild cards are supported as well, so if you have 
-    Delivery Groups named like "Epic North", "Epic South" you can specify "Epic*" and it will capture both. Multiple delivery groups
-    can be specified if they are seperated by commas. If you also use the parameter "excludeDeliveryGroups" then the exclude will
-    supersede any includes and remove any matching Delivery Groups. Omitting this parameter and the script will capture all detected
-    Delivery Groups.
+.PARAMETER exceptionsfile
+    file with a list of exceptions that will be applied to both Desktop Pools, RDS Farms and machine names.
 
-.PARAMETER excludeDesktopPools
-    Exclude specific delivery groups from being added to the ControlUp tree. Wild cards are supported as well, so if you have 
-    Delivery Groups named like "Epic CGY", "Cerner CGY" you can specify "*CGY" and it will exclude any that ends with CGY. Multiple 
-    delivery groups can be specified if they are seperated by commas. If you also use the parameter "includeDeliveryGroup" then the exclude will
-    supersede any includes and remove any matching Delivery Groups.
-
-.PARAMETER LocalPodOnly
-    Configures the script to sync only the local Pod to ControlUp
-
-.PARAMETER LocalSiteOnly
-    Configures the script to sync only the local Site to ControlUp
+.PARAMETER LocalHVPodOnly
+    Configures the script to sync only the local Horizon Site to ControlUp
 
 .PARAMETER SmtpServer
     Name/IP address of an SMTP server to send email alerts via. Optionally specify : and a port number if not the default of 25
@@ -54,16 +43,32 @@
 .PARAMETER emailUseSSL
     Use SSL for SMTP server communication
 
-.EXAMPLE
-    . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local","ctxdc01.bottheory.local" -folderPath "CUSync\Citrix" -includeDeliveryGroup "EpicNorth","EpicSouth","EpicCentral","Cerner*" -excludeDeliveryGroup "CernerNorth" -addBrokersToControlUp -MatchEUCEnvTree
-        Contacts the brokers ddc1.bottheory.local and ctxdc01.bottheory.local, it will save the objects to the ControlUp folder 
-        "CUSync\Citrix", only include specific Delivery Groups including all Delivery Groups that start wtih Cerner and exclude
-        the Delivery Group "CernerNorth", adds the broker machines to ControlUp, have the script match the same structure as
-        the ControlUp EUC Environment.
+.PARAMETER batchCreateFolders
+    Takesa care of adding folders in batches for better performance
 
 .EXAMPLE
-    . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local" -folderPath "CUSync"
-        Contacts the brokers ddc1.bottheory.local and adds all Delivery Groups and their machines to ControlUp under the folder "CUSync"
+    To only add new machines use .\Horizon_Sync.ps1 -HVConnectionServerFQDN connectionserver.domain.com -folderPath "root_folder\Horizon"
+
+.EXAMPLE
+    To add and remove machines use .\Horizon_Sync.ps1 -HVConnectionServerFQDN connectionserver.domain.com -folderPath "root_folder\Horizon" -delete
+
+.EXAMPLE
+    To only get a preview of what will be removed and added use .\Horizon_Sync.ps1 -HVConnectionServerFQDN connectionserver.domain.com -folderPath "root_folder\Horizon" -delete -preview
+
+.EXAMPLE
+    To add and remove machines and use filtering on either pool,farm or machine use .\Horizon_Sync.ps1 -HVConnectionServerFQDN connectionserver.domain.com -folderPath "root_folder\Horizon" -delete -exceptionfile "c:\path\to\exceptionfile.txt"
+
+.EXAMPLE
+    To add and remove machines for only the local Horizon site use .\Horizon_Sync.ps1 -HVConnectionServerFQDN connectionserver.domain.com -folderPath "root_folder\Horizon" -delete -LocalHVPodOnly
+
+.PARAMETER force
+    When the number of new folders to create is large, force the operation to continue otherwise it will abort before commencing
+
+.EXAMPLE
+    To add and remove machines use and specify a ControlUp site yse .\Horizon_Sync.ps1 -HVConnectionServerFQDN connectionserver.domain.com -folderPath "root_folder\Horizon" -delete -site sitename
+
+.EXAMPLE
+    To add and remove machines and log everything use .\Horizon_Sync.ps1 -HVConnectionServerFQDN connectionserver.domain.com -folderPath "root_folder\Horizon" -delete -logfile "c:\path\to\logfile.txt"
 
 .CONTEXT
     VMware Horizon
@@ -76,25 +81,20 @@
     Wouter Kursten          2021-01-21 - Updates Synopsis
     Guy Leech,              2021-02-12 - Added -force for when large number of folders to add
     Wouter Kursten          2021-03-17 - Re-Added renaming of localhvsiteonly to localhvpodonly
-    Guy Leech,              2021-07-29 - Added email alerting
-
-
-
+    Guy Leech               2021-08-31 - Email alerting options added
 
 .LINK
+    https://support.controlup.com/hc/en-us/articles/360015912718
 
 .COMPONENT
 
 .NOTES
-    Requires rights to read Citrix environment.
+    Requires at least Read rights to Horizon environment.
 
     Version:        0.1
     Author:         Wouter Kursten
     Creation Date:  2020-08-06
-    Updated:        2020-08-06
-                    Changed ...
-    Updated:        2021-03-17
-
+    Updated:        2021-08-31
     Purpose:        Created for VMware Horizon Sync
 #>
 
@@ -147,7 +147,6 @@ Param
 
     [Parameter(Mandatory=$false, HelpMessage='Use SSL to send email alert' )]
 	[switch] $emailUseSSL
-
 ) 
 
 ## GRL this way allows script to be run with debug/verbose without changing script
@@ -159,20 +158,12 @@ $ProgressPreference = 'SilentlyContinue'
 [string]$Pooldivider="Desktop Pools"
 [string]$RDSDivider="RDS Farms"
 [string]$buildCuTreeScript = 'Build-CUTree.ps1' ## Script from ControlUp which must reside in the same folder as this script
+[string]$errorMessage = $null
 
 # dot sourcing Functions
 ## GRL Don't assume user has changed location so get the script path instead
 [string]$scriptPath = Split-Path -Path (& { $myInvocation.ScriptName }) -Parent
 [string]$buildCuTreeScriptPath = [System.IO.Path]::Combine( $scriptPath , $buildCuTreeScript )
-[string]$errorMessage = $null
-
-
-function Make-NameWithSafeCharacters ([string]$string) {
-    ###### TODO need to replace the folder path characters that might be illegal
-    #list of illegal characters : '/', '\', ':', '*','?','"','<','>','|','{','}'
-    $returnString = (($string).Replace("/","-")).Replace("\","-").Replace(":","-").Replace("*","-").Replace("?","-").Replace("`"","-").Replace("<","-").Replace(">","-").Replace("|","-").Replace("{","-").Replace("}","-")
-    return $returnString
-}
     
 function Get-CUStoredCredential {
     param (
@@ -232,17 +223,6 @@ function Load-VMWareModules {
             }
         }
     }
-}
-
-function Load-ControlUPModule {
-    # Try Import-Module for each passed component.
-    try {
-        $pathtomodule = (Get-ChildItem "C:\Program Files\Smart-X\ControlUpMonitor\*ControlUp.PowerShell.User.dll" -Recurse | Sort-Object LastWriteTime -Descending)[0]
-        Import-Module $pathtomodule
-    }
-    catch {
-        Write-CULog -Msg 'The required module was not found. Please make sure COntrolUP.CLI Module is installed and available for the user running the script.' -ShowConsole -Type E
-        }
 }
 
 function Connect-HorizonConnectionServer {
@@ -474,7 +454,7 @@ function Write-CULog {
 
 if( ! ( Test-Path -Path $buildCuTreeScriptPath -PathType Leaf -ErrorAction SilentlyContinue ) )
 {
-    [string]$errorMessage = "Unable to find script `"$buildCuTreeScript`" in `"$scriptPath`""
+    $errorMessage = "Unable to find script `"$buildCuTreeScript`" in `"$scriptPath`""
     Write-CULog -Msg $errorMessage -ShowConsole -Type E
     Throw $errorMessage
 }
@@ -492,7 +472,7 @@ Load-VMwareModules -Components @('VimAutomation.HorizonView')
 
 if( ! $CredsHorizon )
 {
-    [string]$errorMessage = "Failed to get stored credentials for $env:username for HorizonView"
+    $errorMessage = "Failed to get stored credentials for $env:username for HorizonView"
     Write-CULog -Msg $errorMessage -ShowConsole -Type E
     Throw $errorMessage
 }
@@ -502,7 +482,7 @@ if( ! $CredsHorizon )
 
 if( ! $objHVConnectionServer )
 {
-    [string]$errorMessage = "Failed to connect to Horizon Connection Server $HVConnectionServerFQDN as $($CredsHorizon.UserName)"
+    $errorMessage = "Failed to connect to Horizon Connection Server $HVConnectionServerFQDN as $($CredsHorizon.UserName)"
     Write-CULog -Msg $errorMessage -ShowConsole -Type E
     Throw $errorMessage
 }
@@ -530,20 +510,19 @@ class ControlUpObject{
 [VMware.Hv.PodFederationLocalPodStatus]$HVpodstatus=($objHVConnectionServer.ExtensionData.PodFederation.PodFederation_Get()).localpodstatus
 if ($HVpodstatus.status -eq "ENABLED"){
     # Retreives all pods
-    [array]$HVpods=$objHVConnectionServer.ExtensionData.Pod.Pod_List()
+    [array]$HVpods = $objHVConnectionServer.ExtensionData.Pod.Pod_List()
     # retreive the first connection server from each pod
-    $HVPodendpoints=@()
-    if ($LocalHVSiteOnly){
-        $hvlocalpod=$hvpods | where-object {$_.LocalPod -eq $true}
-        $hvlocalsite=$objHVConnectionServer.ExtensionData.Site.Site_Get($hvlocalpod.site)
-        foreach ($hvpod in $hvlocalsite.pods){$HVPodendpoints+=$objHVConnectionServer.ExtensionData.PodEndpoint.PodEndpoint_list($hvpod) | select-object -first 1}
-        }
-
+    $HVPodendpoints = @()
+    if ($LocalHVPodOnly){
+        Write-CULog -Msg "Synchronising local site only"
+	    $hvconnectionservers = $hvConnectionServerfqdn
+	}
     else {
-            [array]$HVPodendpoints += foreach ($hvpod in $hvpods) {$objHVConnectionServer.ExtensionData.PodEndpoint.PodEndpoint_List($hvpod.id) | select-object -first 1}
+        $HVPodendpoints = @( foreach ($hvpod in $hvpods) { $objHVConnectionServer.ExtensionData.PodEndpoint.PodEndpoint_List($hvpod.id) | select-object -first 1 } )
+        # Convert from url to only the name
+	    $hvconnectionservers = @( $HVPodendpoints.serveraddress.replace( "https://" , "" ).replace( ":8472/" , "" ) )
     }
-    # Convert from url to only the name
-    [array]$hvconnectionservers=$HVPodendpoints.serveraddress.replace("https://","").replace(":8472/","")
+    
     # Disconnect from the current connection server
     Disconnect-HorizonConnectionServer -HVConnectionServer $objHVConnectionServer
 }
@@ -555,13 +534,12 @@ else {
 }
 # Get the content of the exception file and put it into an array
 if ($Exceptionsfile){
+    Write-CULog -Msg "Using exceptions file $Exceptionsfile"
     [array]$exceptionlist=get-content -Path $Exceptionsfile
 }
 else {
     $exceptionlist=@()
 }
-
-
 
 $ControlUpEnvironmentObject = New-Object System.Collections.Generic.List[PSObject]
 
@@ -570,16 +548,20 @@ foreach ($hvconnectionserver in $hvconnectionservers){
         [VMware.VimAutomation.HorizonView.Impl.V1.ViewObjectImpl]$objHVConnectionServer = Connect-HorizonConnectionServer -HVConnectionServerFQDN $hvconnectionserver -Credential $CredsHorizon
         # Retreive the name of the pod
 
-        $pods=$objHVConnectionServer.extensionData.pod.Pod_list()
+        $pods = $objHVConnectionServer.extensionData.pod.Pod_list()
         [string]$podname = $pods | where-object localpod -eq $True | select-object -expandproperty Displayname
 
         Write-CULog -Msg "Processing Pod $podname"
 
         # Add folder with the podname to the batch
         [string]$targetfolderpath="$podname"
+        if ($LocalHVPodOnly){
+            $folderpath = $folderpath + "\" + $targetfolderpath
+            $targetfolderpath = ""
+        }
+        write-host $folderpath
         $object = [ControlUpObject]::new("$podname" ,"$podname","Folder","","","")
         $ControlUpEnvironmentObject.Add( $object )
-
     }
     else{
         [VMware.VimAutomation.HorizonView.Impl.V1.ViewObjectImpl]$objHVConnectionServer = Connect-HorizonConnectionServer -HVConnectionServerFQDN $hvconnectionserver -Credential $CredsHorizon
@@ -589,7 +571,6 @@ foreach ($hvconnectionserver in $hvconnectionservers){
     # Get the Horizon View desktop Pools
     [array]$HVPools = Get-HVDesktopPools -HVConnectionServer $objHVConnectionServer
     
-
     if($NULL -ne $hvpools){
         Write-CULog -Msg "Pools count is $($HVPools.Count) before applying exception list of $($exceptionlist.Count)"
         [array]$HVPools = @( $HVPools.Where( { $exceptionlist -notcontains $_.DesktopSummaryData.Name} ) )
@@ -601,6 +582,7 @@ foreach ($hvconnectionserver in $hvconnectionservers){
         else{
             [string]$Poolspath= Join-Path -Path $targetfolderpath -ChildPath $Pooldivider
         }
+        ## GL if $HVpodstatus.status -ne "ENABLED" then $ControlUpEnvironmentObject is NULL and therefore name property does not exist so following line will error
         if($ControlUpEnvironmentObject.name -notcontains $Pooldivider){
             $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new("$Pooldivider" ,"$Poolspath","Folder","","$($podname)-Pod","")) )
         }
@@ -663,6 +645,7 @@ foreach ($hvconnectionserver in $hvconnectionservers){
             [string]$Farmspath=$targetfolderpath+"\"+$RDSDivider
         }
         if($ControlUpEnvironmentObject.name -notcontains $RDSDivider){
+            ## GL if $HVpodstatus.status -ne "ENABLED" then $podname is not set and therefore use of $podname below will fail
             $ControlUpEnvironmentObject.Add( ([ControlUpObject]::new("$RDSDivider" ,"$Farmspath","Folder","","$($podname)-Pod","")))
         }
         
@@ -712,6 +695,8 @@ foreach ($hvconnectionserver in $hvconnectionservers){
     }
     Disconnect-HorizonConnectionServer -HVConnectionServer $objHVConnectionServer
 }
+
+Write-Debug "$($ControlUpEnvironmentObject | Format-Table | Out-String)"
 
 $BuildCUTreeParams = @{
     CURootFolder = $folderPath
