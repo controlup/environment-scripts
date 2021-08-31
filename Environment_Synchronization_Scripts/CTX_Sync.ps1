@@ -23,6 +23,9 @@
 .PARAMETER Brokers
     A list of brokers to contact for Delivery Groups and Computers to sync. Multiple brokers can be specified if seperated by commas.
 
+.PARAMETER maxRecordCount
+    The maximum number of machines to retrieve. If not specified and the default is exceeded, the script will figure out the total to use
+
 .PARAMETER includeDeliveryGroup
     Include only these specific Delivery Groups to be added to the ControlUp tree. Wild cards are supported as well, so if you have 
     Delivery Groups named like "Epic North", "Epic South" you can specify "Epic*" and it will capture both. Multiple delivery groups
@@ -98,6 +101,7 @@
     Guy Leech,            2021-08-20 - Fixed issue where dash in Citrix site name caused 2 different folders to be created
     Guy Leech,            2021-08-25 - Fixed manual merge errors and possible flattening of delivery group include and exclude arrays. Errors if no objects to sync found.
                                        Extra logging for inclusions, exclusions and module import failures
+    Guy Leech,            2021-08-20 - Added support for -MaxRecordCount & checking it there are more machines if not specified
 
 .LINK
 
@@ -140,6 +144,9 @@ Param
     [Parameter(Mandatory=$true,  HelpMessage='A list of Brokers to connect and pull data' )]
     [ValidateNotNullOrEmpty()]
     [array] $Brokers,
+    
+    [Parameter(Mandatory=$false, HelpMessage='Maximum number of items to request from broker' )]
+    [int] $maxRecordCount,
 
     [Parameter(Mandatory=$false, HelpMessage='A list of Delivery Groups to include.  Works with wildcards' )]
     [array] $includeDeliveryGroup,
@@ -374,10 +381,47 @@ foreach ($DeliveryGroup in $DeliveryGroups) {
     }
 }
 
+[hashtable]$brokerMachineParameters = @{
+    ReturnTotalRecordCount = $true
+    ErrorVariable = 'recordCount'
+    ErrorAction = 'SilentlyContinue '
+}
+
+if( $PSBoundParameters[ 'maxrecordcount' ] )
+{
+    $brokerMachineParameters.Add( 'maxrecordcount' , $maxRecordCount )
+}
 #Add machines from the delivery group to the environmental object
 foreach ($DeliveryGroup in $DeliveryGroups) {
-    
-    $CTXMachines = Get-BrokerMachine -DesktopGroupName $DeliveryGroup.Name -AdminAddress $DeliveryGroup.Broker
+    $recordCount = $null
+
+    $CTXMachines = @( Get-BrokerMachine -DesktopGroupName $DeliveryGroup.Name -AdminAddress $DeliveryGroup.Broker @brokerMachineParameters )
+    if( $recordCount -and $recordCount.Count )
+    {
+        if( $recordCount[0] -match 'Returned (\d+) of (\d+) items' )
+        {
+            [int]$returned   = $matches[1]
+            [int]$totalItems = $matches[2]
+            if( $returned -lt $totalItems )
+            {
+                Write-Warning -Message "Querying $($DeliveryGroup.Broker) again as only got $returned machines out of $totalItems for delivery group $($DeliveryGroup.Name)"
+                $brokerMachineParameters[ 'maxrecordcount' ] = $totalItems
+                $CTXMachines = @( Get-BrokerMachine -AdminAddress $DeliveryGroup.Broker -DesktopGroupName $DeliveryGroup.Name @brokerMachineParameters )
+            }
+        }
+        else
+        {
+            Write-Error -Message $recordCount[0]
+        }
+    }
+    else
+    {
+        Write-Warning -Message "Failed to get total record count from $($DeliveryGroup.Broker), retrieved $($CTXMachines|Measure-Object -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Count) machines"
+    }
+
+    ## if failed then array may be $null so no count property
+    Write-Verbose -Message "Got $($CTXMachines|Measure-Object -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Count) machines from delivery group $($DeliveryGroup.Name) on $($DeliveryGroup.Broker)"
+
     foreach ($Machine in $CTXMachines) {
         if ($Machine.MachineName -like "S-1-5*") {
             Write-Host "Detected a machine with a SID for a name. These cannot be added to ControlUp. Skipping: $($DeliveryGroup.Name) - $($Machine.machineName)" -ForegroundColor Yellow
