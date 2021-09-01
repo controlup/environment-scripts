@@ -102,6 +102,7 @@
     Guy Leech,            2021-08-25 - Fixed manual merge errors and possible flattening of delivery group include and exclude arrays. Errors if no objects to sync found.
                                        Extra logging for inclusions, exclusions and module import failures
     Guy Leech,            2021-08-20 - Added support for -MaxRecordCount & checking it there are more machines if not specified
+    Guy Leech,            2021-09-01 - Added support for -MaxRecordCount for delivery groups & checking it there are more if not specified
 
 .LINK
 
@@ -247,10 +248,20 @@ $DeliveryGroups = New-Object System.Collections.Generic.List[PSObject]
 $BrokerMachines = New-Object System.Collections.Generic.List[PSObject]
 $CTXSites       = New-Object System.Collections.Generic.List[PSObject]
 
-[hashtable]$brokerParameters = @{ }
+[hashtable]$brokerParameters = @{ 
+    ReturnTotalRecordCount = $true
+    ErrorVariable = 'recordCount'
+    ErrorAction = 'SilentlyContinue '
+}
+
 if( $enabledOnly )
 {
     $brokerParameters.Add( 'Enabled' , $true )
+}
+
+if( $PSBoundParameters[ 'maxrecordcount' ] )
+{
+    $brokerParameters.Add( 'maxrecordcount' , $maxRecordCount )
 }
 
 if ($brokers.count -eq 1 -and $brokers[0].IndexOf(',') -ge 0) {
@@ -260,11 +271,42 @@ if ($brokers.count -eq 1 -and $brokers[0].IndexOf(',') -ge 0) {
 Try {
     foreach ($adminAddr in $brokers) {
         $brokerParameters.AdminAddress = $adminAddr
-        $CTXSite = Get-BrokerSite -AdminAddress $adminAddr
-        $CTXSites.Add($CTXSite)
+        if( $CTXSite = Get-BrokerSite -AdminAddress $adminAddr )
+        {
+            $CTXSites.Add( $CTXSite )
+        }
         Write-Verbose -Message "Querying $adminAddr for Delivery Groups"
+        $recordCount = $null
+        [array]$brokerDeliveryGroups = @( Get-BrokerDesktopGroup @brokerParameters )
+
+        if( $recordCount -and $recordCount.Count )
+        {
+            if( $recordCount[0] -match 'Returned (\d+) of (\d+) items' )
+            {
+                [int]$returned   = $matches[1]
+                [int]$totalItems = $matches[2]
+                if( $returned -lt $totalItems )
+                {
+                    Write-Warning -Message "Querying $adminAddr again as only got $returned delivery groups out of $totalItems total"
+                    $brokerParameters[ 'maxrecordcount' ] = $totalItems
+                    $brokerDeliveryGroups = @( Get-BrokerDesktopGroup @brokerParameters )
+                }
+            }
+            else
+            {
+                Write-Error -Message $recordCount[0]
+            }
+        }
+        else
+        {
+            Write-Warning -Message "Failed to get total record count from $($DeliveryGroup.Broker), retrieved $($brokerDeliveryGroups|Measure-Object -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Count) delivery groups"
+        }
+
+        ## if failed then array may be $null so no count property
+        Write-Verbose -Message "Got $($brokerDeliveryGroups|Measure-Object -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Count) delivery groups from $adminAddr"
+
         #Get list of Delivery Groups
-        foreach ($DeliveryGroup in $(Get-BrokerDesktopGroup @brokerParameters)) {
+        foreach ($DeliveryGroup in $brokerDeliveryGroups) {
             if ($DeliveryGroups.Count -eq 0) {
                 $DeliveryGroupObject = [PSCustomObject]@{
                         MachineName         = ""
