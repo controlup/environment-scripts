@@ -20,6 +20,7 @@
         @guyrleech 2021-07-29   Added more logging to log file. Added email notification
         @guyrleech 2021-08-13   Added checking and more logging for CU Monitor service state
         @guyrleech 2021-08-16   Changed service checking as was causing access denied errors
+        @Wouter Kursten 2021-09-14  Added -dnsname to add-cucomputer lines to reflect the dnsname variable in the computer objects
 #>
 
 <#
