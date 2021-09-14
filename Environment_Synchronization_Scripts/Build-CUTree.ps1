@@ -636,15 +636,15 @@ function Build-CUTree {
                     }
                 
     	        try {
-                         Add-CUComputer -Domain $ExtComputer.Domain -Name $ExtComputer.Name -FolderPath "$($ExtComputer.FolderPath)" -Batch $ComputersAddBatch @SiteIdParam
+                         Add-CUComputer -Domain $ExtComputer.Domain -Name $ExtComputer.Name -DNSName $ExtComputer.DNSName -FolderPath "$($ExtComputer.FolderPath)" -Batch $ComputersAddBatch @SiteIdParam
                 } catch {
                          Write-CULog "Error while attempting to run Add-CUComputer" -ShowConsole -Type E
                          Write-CULog "$($Error[0])"  -ShowConsole -Type E
                 }
                 if ( ! [string]::IsNullOrEmpty( $SiteIdGUID )) {
-                    $MachinesToAdd.Add("Add-CUComputer -Domain $($ExtComputer.Domain) -Name $($ExtComputer.Name) -FolderPath `"$($ExtComputer.FolderPath)`" -SiteId $SiteIdGUID")
+                    $MachinesToAdd.Add("Add-CUComputer -Domain $($ExtComputer.Domain) -Name $($ExtComputer.Name) -DNSName $($ExtComputer.DNSName) -FolderPath `"$($ExtComputer.FolderPath)`" -SiteId $SiteIdGUID")
                 } else {
-                    $MachinesToAdd.Add("Add-CUComputer -Domain $($ExtComputer.Domain) -Name $($ExtComputer.Name) -FolderPath `"$($ExtComputer.FolderPath)`"")
+                    $MachinesToAdd.Add("Add-CUComputer -Domain $($ExtComputer.Domain) -Name $($ExtComputer.Name) -DNSName $($ExtComputer.DNSName) -FolderPath `"$($ExtComputer.FolderPath)`"")
                 }
                 $ComputersAddCount = $ComputersAddCount+1
 	        }
