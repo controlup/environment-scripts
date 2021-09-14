@@ -20,6 +20,7 @@
         @guyrleech 2021-07-29   Added more logging to log file. Added email notification
         @guyrleech 2021-08-13   Added checking and more logging for CU Monitor service state
         @guyrleech 2021-08-16   Changed service checking as was causing access denied errors
+        @Wouter Kursten 2021-09-14  Added -dnsname to add-cucomputer lines to reflect the dnsname variable in the computer objects
 #>
 
 <#
@@ -636,15 +637,15 @@ function Build-CUTree {
                     }
                 
     	        try {
-                         Add-CUComputer -Domain $ExtComputer.Domain -Name $ExtComputer.Name -FolderPath "$($ExtComputer.FolderPath)" -Batch $ComputersAddBatch @SiteIdParam
+                         Add-CUComputer -Domain $ExtComputer.Domain -Name $ExtComputer.Name -DNSName $ExtComputer.DNSName -FolderPath "$($ExtComputer.FolderPath)" -Batch $ComputersAddBatch @SiteIdParam
                 } catch {
                          Write-CULog "Error while attempting to run Add-CUComputer" -ShowConsole -Type E
                          Write-CULog "$($Error[0])"  -ShowConsole -Type E
                 }
                 if ( ! [string]::IsNullOrEmpty( $SiteIdGUID )) {
-                    $MachinesToAdd.Add("Add-CUComputer -Domain $($ExtComputer.Domain) -Name $($ExtComputer.Name) -FolderPath `"$($ExtComputer.FolderPath)`" -SiteId $SiteIdGUID")
+                    $MachinesToAdd.Add("Add-CUComputer -Domain $($ExtComputer.Domain) -Name $($ExtComputer.Name) -DNSName $($ExtComputer.DNSName) -FolderPath `"$($ExtComputer.FolderPath)`" -SiteId $SiteIdGUID")
                 } else {
-                    $MachinesToAdd.Add("Add-CUComputer -Domain $($ExtComputer.Domain) -Name $($ExtComputer.Name) -FolderPath `"$($ExtComputer.FolderPath)`"")
+                    $MachinesToAdd.Add("Add-CUComputer -Domain $($ExtComputer.Domain) -Name $($ExtComputer.Name) -DNSName $($ExtComputer.DNSName) -FolderPath `"$($ExtComputer.FolderPath)`"")
                 }
                 $ComputersAddCount = $ComputersAddCount+1
 	        }
