@@ -21,10 +21,36 @@
     Specify a ControlUp Monitor Site to assign the objects.
 
 .PARAMETER Base
-    get this from the URL shown after manual logon to VMware cloud
+    Get this from the URL shown after manual logon to VMware Cloud
+
+.PARAMETER batchCreateFolders
+    Create folders in batches rather than sequentially
+
+.PARAMETER force
+    When the number of new folders to create is large, force the operation to continue otherwise it will abort before commencing
+
+.PARAMETER SmtpServer
+    Name/IP address of an SMTP server to send email alerts via. Optionally specify : and a port number if not the default of 25
+
+.PARAMETER emailFrom
+    Email address from which to send email alerts from
+
+.PARAMETER emailTo
+    Email addresses to which to send email alerts to
+
+.PARAMETER emailUseSSL
+    Use SSL for SMTP server communication
 
 .EXAMPLE
-    "C:\CU Environment Sync Scripts\Horizon_Azure_Sync.ps1"  -folderPath "\Datacenter\Virtual Desktops\Horizon Cloud"  -logfile "C:\CU Environment Sync Scripts\HZ Azure Sync.log" -base "cloud-us-2"
+    . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local","ctxdc01.bottheory.local" -folderPath "CUSync\Citrix" -includeDeliveryGroup "EpicNorth","EpicSouth","EpicCentral","Cerner*" -excludeDeliveryGroup "CernerNorth" -addBrokersToControlUp -MatchEUCEnvTree
+        Contacts the brokers ddc1.bottheory.local and ctxdc01.bottheory.local, it will save the objects to the ControlUp folder
+        "CUSync\Citrix", only include specific Delivery Groups including all Delivery Groups that start wtih Cerner and exclude
+        the Delivery Group "CernerNorth", adds the broker machines to ControlUp, have the script match the same structure as
+        the ControlUp EUC Environment.
+
+.EXAMPLE
+    . .\CU_SyncScript.ps1 -Brokers "ddc1.bottheory.local" -folderPath "CUSync"
+        Contacts the brokers ddc1.bottheory.local and adds all Delivery Groups and their machines to ControlUp under the folder "CUSync"
 
 .CONTEXT
     VMware Horizon
@@ -39,60 +65,69 @@
     Guy Leech,              2020-12-24 - Verbose output for findpools result for troubleshooting missing machines
     Guy Leech,              2021-01-06 - Use findpools output to find any pools not already retrieved
     Wouter Kursten,         2021-01-21 - removed unused parameters and updated synopsis
+    Guy Leech,              2021-02-12 - Added -force for when large number of folders to add
+    Guy Leech,              2021-02-14 - Added prompting to create credential files if missing and able to prompt
+    Guy Leech,              2021-07-29 - Added more logging to log file. Added email notification
+
 .LINK
 
 .COMPONENT
 
 .NOTES
-    Requires rights to read Horizon on Azure environment.
+    Requires rights to read Citrix environment.
 
     Version:        0.1
-    Author:         Guy Leech
-    Creation Date:  2020-09-23
-
-    Purpose:        Created for VMware Horizon on Azure Sync
+    Author:         Wouter Kursten
+    Creation Date:  2020-08-06
+    Updated:        2020-08-06
+                    Changed ...
+    Purpose:        Created for VMware Horizon Sync
 #>
 
 [CmdletBinding()]
 
 Param
 (
-    [Parameter(
-        Mandatory=$true,
-        HelpMessage='Enter a ControlUp subfolder to save your Horizon tree'
-    )]
+    [Parameter(Mandatory=$true, HelpMessage='Enter a ControlUp subfolder to save your Horizon tree' )]
     [ValidateNotNullOrEmpty()]
     [string] $folderPath,
 
-    [Parameter(
-        HelpMessage='Preview the changes'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(HelpMessage='Preview the changes')]
     [switch] $Preview,
 
-    [Parameter(
-        HelpMessage='Base URL used to logon to VMware Cloud'
-    )]
+    [Parameter(HelpMessage='Base URL used to logon to VMware Cloud')]
     [ValidateNotNullOrEmpty()]
     [string]$base = 'cloud-us-2' , ## get this from the URL shown after manual logon to VMware cloud
 
-    [Parameter(
-        HelpMessage='Execute removal operations. When combined with preview it will only display the proposed changes'
-    )]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(HelpMessage='Execute removal operations. When combined with preview it will only display the proposed changes' )]
     [switch] $Delete,
 
-    [Parameter(
-        HelpMessage='Enter a path to generate a log file of the proposed changes'
-    )]
+    [Parameter(HelpMessage='Enter a path to generate a log file of the proposed changes')]
     [ValidateNotNullOrEmpty()]
     [string] $LogFile,
 
-   [Parameter(
-        HelpMessage='Enter a ControlUp Site'
-    )]
+    [Parameter(HelpMessage='Enter a ControlUp Site' )]
     [ValidateNotNullOrEmpty()]
-    [string] $Site
+    [string] $Site,
+
+    [Parameter(Mandatory=$false, HelpMessage='Create folders in batches rather than individually' )]
+	[switch] $batchCreateFolders ,
+
+    [Parameter(Mandatory=$false, HelpMessage='Force folder creation if number exceeds safe limit' )]
+	[switch] $force ,
+
+    [Parameter(Mandatory=$false, HelpMessage='Smtp server to send alert emails from' )]
+	[string] $SmtpServer ,
+
+    [Parameter(Mandatory=$false, HelpMessage='Email address to send alert email from' )]
+	[string] $emailFrom ,
+
+    [Parameter(Mandatory=$false, HelpMessage='Email addresses to send alert email to' )]
+	[string[]] $emailTo ,
+
+    [Parameter(Mandatory=$false, HelpMessage='Use SSL to send email alert' )]
+	[switch] $emailUseSSL
+
 )
 
 ## GRL this way allows script to be run with debug/verbose without changing script
@@ -107,13 +142,15 @@ $ProgressPreference = 'SilentlyContinue'
 
 # dot sourcing Functions
 ## GRL Don't assume user has changed location so get the script path instead
-[string]$scriptPath = Split-Path -Path (& { $myInvocation.ScriptName }) -Parent
+[string]$thisScript = & { $myInvocation.ScriptName }
+[string]$scriptPath = Split-Path -Path $thisScript -Parent
 [string]$buildCuTreeScriptPath = [System.IO.Path]::Combine( $scriptPath , $buildCuTreeScript )
+[string]$errorMessage = $null
 
 if( ! ( Test-Path -Path $buildCuTreeScriptPath -PathType Leaf -ErrorAction SilentlyContinue ) )
 {
-    [string]$errorMessage = "Unable to find script `"$buildCuTreeScript`" in `"$scriptPath`""
-    ## Write-CULog -Msg $errorMessage -ShowConsole -Type E ## can't write to CU-Log yet as that function is in the scripot we can't find
+    $errorMessage = "Unable to find script `"$buildCuTreeScript`" in `"$scriptPath`""
+    Write-CULog -Msg $errorMessage -ShowConsole -Type E
     Throw $errorMessage
 }
 
@@ -130,11 +167,49 @@ function Get-CUStoredCredential {
     [string]$strCUCredFile = Join-Path -Path "$strCUCredFolder" -ChildPath "$($env:USERNAME)_$($System)_Cred.xml"
     if( ! ( Test-Path -Path $strCUCredFile -ErrorAction SilentlyContinue ) )
     {
-        [string]$errorMessage = "Unable to find stored credential file `"$strCUCredFile`" - have you previously run the `"Create Credentials for Horizon Scripts`" script for user $env:username ?"
-        Write-CULog -Msg $errorMessage -ShowConsole -Type E
-        Throw $errorMessage
+        [array]$services = @()
+        $parentPid = $null
+        [string]$credentialsScript = [System.IO.Path]::Combine( $scriptPath , 'Store credentials.ps1' )
+        if( Test-Path -Path $credentialsScript -PathType Leaf -ErrorAction SilentlyContinue )
+        {
+            if( ( $parentPid = Get-CimInstance -ClassName win32_process -Filter "ProcessId = '$pid'" | Select-Object -ExpandProperty ParentProcessId ) -ne $null )
+            {
+                $services = @( Get-CimInstance -ClassName win32_service -Filter "ProcessId = '$parentPid'" )
+            }
+            else
+            {
+                Write-CULog -Msg "Failed to find parent process for pid $pid" -ShowConsole -Type E
+            }
+
+            if( ! $services -or ! $services.Count )
+            {
+                [string]$answer = 'no'
+                Try
+                {
+                    $answer = Read-Host -Prompt "Unable to find stored credential file for $system - would you like to create it now ? "
+                }
+                Catch
+                {
+                    ## will throw an exception when not running interactively, eg via scheduled task
+                    [string]$message = "No credentials file `"$strCUCredFile`" but unable to prompt"
+                    Write-CULog -Msg $message -ShowConsole -Type E
+                    [System.Diagnostics.Debug]::WriteLine( $message )
+                }
+                if( $answer -and $answer -match '^y' )
+                {
+                    & $credentialsScript -credential $null -credentialType $system | Write-Host
+                }
+            }
+            else
+            {
+                [string]$message = "No credentials file `"$strCUCredFile`" but parent (pid $parentPid) is a service so won't prompt"
+                Write-CULog -Msg $message -ShowConsole -Type E
+                [System.Diagnostics.Debug]::WriteLine( $message )
+            }
+        }
     }
-    else
+    
+    if( Test-Path -Path $strCUCredFile -ErrorAction SilentlyContinue )
     {
         Try
         {
@@ -142,10 +217,16 @@ function Get-CUStoredCredential {
         }
         Catch
         {
-            [string]$errorMessage = "Error reading stored credentials from `"$strCUCredFile`" : $_"
+            $errorMessage = "Error reading stored credentials from `"$strCUCredFile`" : $_"
             Write-CULog -Msg $errorMessage -ShowConsole -Type E
             Throw $errorMessage
         }
+    }
+    else
+    {
+        $errorMessage = "Unable to find stored credential file `"$strCUCredFile`" - have you previously run the `"Create Credentials for Horizon Scripts`" script for user $env:username ?"
+        Write-CULog -Msg $errorMessage -ShowConsole -Type E
+        Throw $errorMessage
     }
 }
 
@@ -238,7 +319,7 @@ function Write-CULog {
 
 if( ! $myVMwareCredential )
 {
-    [string]$errorMessage = "Failed to get stored credentials for $env:username for myVMware"
+    $errorMessage = "Failed to get stored credentials for $env:username for myVMware"
     Write-CULog -Msg $errorMessage -ShowConsole -Type E
     Throw $errorMessage
 }
@@ -247,7 +328,7 @@ if( ! $myVMwareCredential )
 
 if( ! $domainCredential )
 {
-    [string]$errorMessage = "Failed to get stored credentials for $env:username for domain account"
+    $errorMessage = "Failed to get stored credentials for $env:username for domain account"
     Write-CULog -Msg $errorMessage -ShowConsole -Type E
     Throw $errorMessage
 }
@@ -296,12 +377,18 @@ try
 catch
 {
     $response1 = $null
-    Throw "Failed to logon to $($RESTparams.uri) as $($myVMwareCredential.UserName) : $_"
+    $errorMessage = "Failed to logon to $($RESTparams.uri) as $($myVMwareCredential.UserName) : $_"
+    Write-CULog -Msg $errorMessage -ShowConsole -Type E
+    Send-EmailAlert -SmtpServer $SmtpServer -from $emailFrom -to $emailTo -useSSL:$emailUseSSL -subject "Fatal error from ControlUp sync script $thisScript on $env:COMPUTERNAME" -body "$errorMessage"
+    Throw $errorMessage
 }
 
 if( ! $response1 -or ! $response1.PSObject.Properties[ 'authSession' ] )
 {
-    Throw "Failed to get authSession from $($RESTparams.uri) as $($myVMwareCredential.UserName), got $response1"
+    $errorMessage = "Failed to get authSession from $($RESTparams.uri) as $($myVMwareCredential.UserName) - check pods are online & available"
+    Write-CULog -Msg $errorMessage -ShowConsole -Type E
+    Send-EmailAlert -SmtpServer $SmtpServer -from $emailFrom -to $emailTo -useSSL:$emailUseSSL -subject "Fatal error from ControlUp sync script $thisScript on $env:COMPUTERNAME" -body "$errorMessage"
+    Throw $errorMessage
 }
 
 $RESTparams.websession = $sessionVariable
@@ -335,12 +422,16 @@ try
 catch
 {
     $authentication = $null
-    Throw "Failed AD logon to $($RESTparams.uri) as $($domainCredential.UserName) : $_"
+    $errorMessage = "Failed AD logon to $($RESTparams.uri) as $($domainCredential.UserName) : $_"
+    Write-CULog -Msg $errorMessage -ShowConsole -Type E
+    Throw $errorMessage
 }
 
 if( ! $authentication -or $null -eq $authentication.PSObject.Properties[ 'apiToken' ] )
 {
-    Throw "No apiToken returned from AD logon"
+    $errorMessage = "No apiToken returned from AD logon"   
+    Write-CULog -Msg $errorMessage -ShowConsole -Type E
+    Throw $errorMessage
 }
 
 #Create ControlUp structure object for synchronizing
@@ -359,14 +450,6 @@ class ControlUpObject{
         $this.Description = $description
         $this.DNSName = $DNSName
     }
-}
-
-# Get the content of the exception file and put it into an array
-if ($Exceptionsfile){
-    [array]$exceptionlist= get-content -Path $Exceptionsfile
-}
-else {
-    $exceptionlist=@()
 }
 
 ## Map VMware terms to CU
@@ -392,7 +475,9 @@ try
 catch
 {
     $broker = $null
-    Throw "Failed to get broker via $($RESTparams.uri) : $_"
+    $errorMessage = "Failed to get broker via $($RESTparams.uri) : $_"
+    Write-CULog -Msg $errorMessage -ShowConsole -Type E
+    Throw $errorMessage
 }
 
 if( $broker )
@@ -413,7 +498,9 @@ try
 catch
 {
     $assignments = $null
-    Throw "Failed to get all multi pod VDI assignments via $($RESTparams.uri) : $_"
+    $errorMessage = "Failed to get all multi pod VDI assignments via $($RESTparams.uri) : $_" 
+    Write-CULog -Msg $errorMessage -ShowConsole -Type E
+    Throw $errorMessage
 }
 
 ## 8. Get farms
@@ -426,7 +513,8 @@ try
 catch
 {
     $farms = $null
-    Write-Warning -Message "Failed to get farms via $($RESTparams.uri) : $_"
+    $errorMessage = "Failed to get farms via $($RESTparams.uri) : $_"
+    Write-CULog -Msg $errorMessage -ShowConsole -Type W
 }
 
 [hashtable]$parentFolders = @{}
@@ -434,7 +522,8 @@ catch
 
 if( ! $farms -or ! $farms.Count )
 {
-    Write-Warning -Message "Call to $($RESTparams.uri) returned no farms"
+    $errorMessage = "Call to $($RESTparams.uri) returned no farms"
+    Write-CULog -Msg $errorMessage -ShowConsole -Type W
 }
 else
 {
@@ -451,7 +540,8 @@ else
         catch
         {
             $VMs = $null
-            Write-Warning -Message "Failed to get VMs via $($RESTparams.uri) : $_"
+            $errorMessage = "Failed to get VMs via $($RESTparams.uri) : $_"
+            Write-CULog -Msg $errorMessage -ShowConsole -Type W
         }
 
         if( $VMs )
@@ -496,7 +586,8 @@ else
 
 if( ! $assignments -or $assignments.status -ne 'SUCCESS' )
 {
-    Write-Warning -Message "Call to $($RESTparams.uri) failed - $assignments"
+    $errorMessage = "Call to $($RESTparams.uri) failed - $assignments"
+    Write-CULog -Msg $errorMessage -ShowConsole -Type W
 }
 else
 {
@@ -515,7 +606,8 @@ else
         catch
         {
             $poolDetails = $null
-            Write-Warning -Message "Failed to get assignment via $($RESTparams.uri) : $_"
+            $errorMessage = "Failed to get assignment via $($RESTparams.uri) : $_"
+            Write-CULog -Msg $errorMessage -ShowConsole -Type W
         }
 
         if( $poolDetails -and $poolDetails.status -eq 'SUCCESS' -and $pooldetails.PSObject.Properties[ 'data' ] )
@@ -536,7 +628,8 @@ else
                     catch
                     {
                         $poolVMs = $null
-                        Write-Warning -Message "Failed to get machine group via $($RESTparams.uri) : $_"
+                        $errorMessage = "Failed to get machine group via $($RESTparams.uri) : $_"
+                        Write-CULog -Msg $errorMessage -ShowConsole -Type W
                     }
 
                     if( $poolVMs )
@@ -603,7 +696,9 @@ try
 catch
 {
     $pools = $null
-    Throw "Failed to get pools via $($RESTparams.uri) : $_"
+    $errorMessage = "Failed to get pools via $($RESTparams.uri) : $_"
+    Write-CULog -Msg $errorMessage -ShowConsole -Type E
+    Throw $errorMessage
 }
 
 $RESTparams.Method = 'GET'
@@ -660,7 +755,8 @@ if( $pools )
             }
             catch
             {
-                Write-Warning -Message "Failed to get desktops for pool $($pool.Name) id $($pool.id)"
+                $errorMessage = "Failed to get desktops for pool $($pool.Name) id $($pool.id)"
+                Write-CULog -Msg $errorMessage -ShowConsole -Type W
             }
         }
         else
@@ -687,7 +783,31 @@ if ($LogFile){
 }
 
 if ($Site){
-    $BuildCUTreeParams.Add("SiteId",$Site)
+    $BuildCUTreeParams.Add("SiteName",$Site)
+}
+
+if ($batchCreateFolders){
+    $BuildCUTreeParams.Add("batchCreateFolders",$true)
+}
+
+if ($Force){
+    $BuildCUTreeParams.Add("Force",$true)
+}
+
+if ($SmtpServer){
+    $BuildCUTreeParams.Add("SmtpServer",$SmtpServer)
+}
+
+if ($emailFrom){
+    $BuildCUTreeParams.Add("emailFrom",$emailFrom)
+}
+
+if ($emailTo){
+    $BuildCUTreeParams.Add("emailTo",$emailTo)
+}
+
+if ($emailUseSSL){
+    $BuildCUTreeParams.Add("emailUseSSL",$emailUseSSL)
 }
 
 [int]$errorCount = Build-CUTree -ExternalTree $ControlUpEnvironmentObject @BuildCUTreeParams

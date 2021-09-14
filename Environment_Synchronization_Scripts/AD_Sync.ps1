@@ -2,22 +2,56 @@
 <#
 .SYNOPSIS
     Creates the folder structure and adds/removes or moves machines into the structure.
+
 .DESCRIPTION
-    Creates the folder structure and adds/removes or moves machines into the structure.
+
+.PARAMETER folderPath
+    The target folder path in ControlUp to save these Objects.
+
+.PARAMETER OU
+    The AD OU to sync with ControlUp. Child OUs will also be added where the ControlUp folder structure will be the same as that of the OUs
+    
+.PARAMETER domain
+    The AD domain containing the OU if it is not the current domain
+
+.PARAMETER Preview
+     Shows the expected results without committing any changes to the ControlUp environment
+
+.PARAMETER Delete
+    Enables the script to execute object removals. Use with -Preview to see the proposed changes without committing changes.
+
+.PARAMETER LogFile
+    Tells the script to log the output to a text file. Can be used with -Preview to see the proposed changes.
+
+.PARAMETER Site
+    Name of the ControlUp site to add the machines to. If not specified the default site will be used
+
+.PARAMETER batchCreateFolders
+    Create folders in batches rather than sequentially
+
+.PARAMETER force
+    When the number of new folders to create is large, force the operation to continue otherwise it will abort before commencing
+
 .EXAMPLE
-    . .\AD_SyncScript.ps1 -OU "OU=TestOU,DC=bottheory,DC=local"
+    & .\AD_SyncScript.ps1 -OU "OU=TestOU,DC=bottheory,DC=local" -FolderPath 'Script Test\AD'
+
 .CONTEXT
     Active Directory
+
 .MODIFICATION_HISTORY
     Trentent Tye,         07/30/20 - Original Code
     Guy Leech,            11/05/20 - Added -batchCreateFolders option to create folders in batches (faster) otherwise creates them one at a time
-
+    Guy Leech,            11/02/21 - Improved help. Added -force for when large number of folders to add
+    Guy Leech,            03/03/21 - Added -domain parameter for searching different domains
 .LINK
 
 .COMPONENT
 
 .NOTES
-    Requires rights to read active directory. In testing in the lab I was able to process 10,000 computer objects and 20 OU's in ~12 seconds
+
+    Must be run on a machine with the ControlUp Monitor installed.
+
+    Requires rights to read active directory.
 
     Version:        0.1
     Author:         Trentent Tye
@@ -31,59 +65,39 @@
 [CmdletBinding()]
 Param
 (
-    [Parameter(
-        Position=0, 
-        Mandatory=$true, 
-        HelpMessage='Enter a ControlUp subfolder to save your WVD tree' ## GRL WVD??
-    )]
+    [Parameter(Mandatory=$true, HelpMessage='Enter a ControlUp subfolder to save your AD tree to')]
     [ValidateNotNullOrEmpty()]
     [string] $folderPath,
 
-    [Parameter(
-        Position=1, 
-        Mandatory=$true, 
-        HelpMessage='Enter the Distinguished Name of the OU to sync'
-    )]
+    [Parameter(Mandatory=$true, HelpMessage='Enter the Distinguished Name of the OU to sync')]
     [ValidateNotNullOrEmpty()]
     [string] $OU,
+    
+    [Parameter(Mandatory=$false, HelpMessage='Domain to query if not the default')]
+    [ValidateNotNullOrEmpty()]
+    [string] $domain,
 
-    [Parameter(
-        Position=2, 
-        Mandatory=$false, 
-        HelpMessage='Preview the changes'
-    )]
+    [Parameter(Mandatory=$false, HelpMessage='Preview the changes' )]
     [ValidateNotNullOrEmpty()]
     [switch] $Preview,
 
-    [Parameter(
-        Position=3, 
-        Mandatory=$false, 
-        HelpMessage='Execute removal operations. When combined with preview it will only display the proposed changes'
-    )]
+    [Parameter(Mandatory=$false, HelpMessage='Execute removal operations. When combined with preview it will only display the proposed changes')]
     [ValidateNotNullOrEmpty()]
     [switch] $Delete,
 
-    [Parameter(
-        Position=4, 
-        Mandatory=$false, 
-        HelpMessage='Enter a path to generate a log file of the proposed changes'
-    )]
+    [Parameter(Mandatory=$false, HelpMessage='Enter a path to generate a log file of the proposed changes')]
     [ValidateNotNullOrEmpty()]
     [string] $LogFile,
 
-      [Parameter(
-        Position=5, 
-        Mandatory=$false, 
-        HelpMessage='Enter a ControlUp Site'
-    )]
+    [Parameter(Mandatory=$false, HelpMessage='Enter a ControlUp Site Name' )]
     [ValidateNotNullOrEmpty()]
     [string] $Site ,
 
-    [Parameter(
-    	Mandatory=$false,
-    	HelpMessage='Create folders in batches rather than individually'
-	)]
-	[switch] $batchCreateFolders
+    [Parameter(Mandatory=$false, HelpMessage='Create folders in batches rather than individually')]
+	[switch] $batchCreateFolders ,
+
+    [Parameter(Mandatory=$false, HelpMessage='Force folder creation if number exceeds safe limit')]
+	[switch] $force
 ) 
 
 ## GRL this way allows script to be run with debug/verbose without changing script
@@ -121,19 +135,47 @@ class ControlUpObject{
 
 #region AD Functions
 
+Function ConvertTo-LDAP {
+    
+    Param
+    (
+        [string]$name
+    )
+
+    [string]$convertedName = $Null
+
+    if( ! [string]::IsNullOrEmpty( $name ) )
+    {
+        if( $name -match '^DC=' )
+        {
+            $convertedName = 'LDAP://{0}' -f $name
+        }
+        else
+        {
+            $convertedName = 'LDAP://DC={0}' -f ( $name -replace '\.' , ',DC=' )
+        }
+    }
+
+    $convertedName
+}
+
 Function Get-DomainNameFromDistinguishedName {
   
     [CmdletBinding()]
     Param
     (
         [Parameter(
-            Position=0, 
             Mandatory=$true, 
             HelpMessage='Enter the Distinguished name for an absolute path.  Eg OU=TestOU,DC=bottheory,DC=local',
-            ParameterSetName="WithDistinguishedName"
-        )]
+            ParameterSetName="WithDistinguishedName"        )]
         [ValidateNotNullOrEmpty()]
-        [string] $DistinguishedName
+        [string] $DistinguishedName ,
+        
+        [Parameter(
+            Mandatory=$false, 
+            HelpMessage='Enter the domain name to search if not the current.  Eg acme.local'        )]
+        [AllowNull()]
+        [string] $DomainName
     )
 
     Process {
@@ -141,6 +183,10 @@ Function Get-DomainNameFromDistinguishedName {
         $RootDN = ($DistinguishedName | Select-String "(DC.+)\w+"  -AllMatches).Matches.Value
         
         $Search = [adsisearcher]"(&(distinguishedName=$RootDN))"
+        if( $PSBoundParameters[ 'domainName' ] -and ! [string]::IsNullOrEmpty( $domainName ) )
+        {
+            $search.SearchRoot = ConvertTo-LDAP -name $DomainName
+        }
         $search.PropertiesToLoad.AddRange(@('canonicalname'))
         $RootDNProperties = $Search.FindAll()
         if (-not([string]::IsNullOrEmpty($RootDNProperties.properties.canonicalname))) {
@@ -157,49 +203,58 @@ Function Get-OU {
     Param
     (
         [Parameter(
-            Position=0, 
             Mandatory=$true, 
             HelpMessage='Enter a organizational unit name',
-            ParameterSetName="WithName"
-        )]
+            ParameterSetName="WithName"        )]
         [ValidateNotNullOrEmpty()]
         [string] $Name,
 
         [Parameter(
-            Position=0, 
             Mandatory=$true, 
             HelpMessage='Enter the Distinguished name for an absolute path.  Eg OU=TestOU,DC=bottheory,DC=local',
-            ParameterSetName="WithDistinguishedName"
-        )]
+            ParameterSetName="WithDistinguishedName"        )]
         [ValidateNotNullOrEmpty()]
-        [string] $DistinguishedName
+        [string] $DistinguishedName ,
+
+        [Parameter(
+            Mandatory=$false, 
+            HelpMessage='Enter the domain name to search if not the current.  Eg acme.local'        )]
+        [AllowNull()]
+        [string] $DomainName
     )
 
     Process {
 
-        if ($name) {
-            $Search = [adsisearcher]"(&(objectCategory=organizationalUnit)(name=$name))"
-            $OUObjects = $Search.FindAll()
-            if ($OUObjects.count -eq 1) {
-                return $OUObjects
-            } else {
-                Write-Error "More than 1 OU was found. Total OU's found: $($OUObjects.count)"
-            }
+        [string]$searchString = "(&(objectCategory=organizationalUnit)"
+        $OUObjects = $null
+
+        if( $PSBoundParameters[ 'name' ] )
+        {
+            $searchString = -join $searchString , "(name=$name))"
+        }
+        elseif( $PSBoundParameters[ 'DistinguishedName' ] )
+        {
+            $searchString = -join $searchString , "(distinguishedName=$DistinguishedName))"
         }
 
-        if ($DistinguishedName) {
-            $Search = [adsisearcher]"(&(objectCategory=organizationalUnit)(distinguishedName=$DistinguishedName))"
-            $OUObjects = $Search.FindAll()
-            if ($OUObjects.count -eq 1) {
-                return $OUObjects
-            } 
-            if ($OUObjects.count -gt 1) {
-                Write-Error "More than 1 OU was found. Total OU's found: $($OUObjects.count)"
+        if ( $Search = [adsisearcher]$searchString )
+        {
+            if( $PSBoundParameters[ 'domainName' ] -and ! [string]::IsNullOrEmpty( $domainName ) )
+            {
+                $search.SearchRoot = ConvertTo-LDAP -name $DomainName
             }
-            if ($OUObjects.count -eq 0) {
-                Write-Error "No OU's were found with the distinguishedName: $DistinguishedName"
+            $OUObjects = @( $Search.FindAll() )
+            if ($OUObjects.count -ne 1 )
+            {
+                Write-Error -Message "$($OUObjects.count) OUs were found for `"$(($search.Filter.Split( '&=()' , [System.StringSplitOptions]::RemoveEmptyEntries ))[-1])`""
             }
         }
+        else
+        {
+            Write-Error -Message "Failed to create ADSI searcher from $searchString"
+        }
+
+        $OUObjects ## return
     }
 }
 
@@ -320,7 +375,7 @@ $ADEnvironment = New-Object -TypeName System.Collections.Generic.List[PSObject]
 
 #region Generate ControlUpObject that will be used to Add objects into ControlUp.
 Write-Host "Getting OU Object: $OU" -foregroundColor Yellow
-if( ! ( $RootOU = Get-OU -DistinguishedName $OU ) )
+if( ! ( $RootOU = Get-OU -DistinguishedName $OU -DomainName $domain ) )
 {
     Throw "Failed to locate OU $OU"
 }
@@ -360,7 +415,7 @@ Write-Verbose "Found $($OUCounts) OUs in $($ListOfOUsTimer.TotalSeconds) seconds
 
 Write-Verbose "Converting OUs to ControlUp Folder Import objects took $($ConvertOU_ToFoldersTimer.TotalSeconds) seconds"
 $ListOfComputersTimer = Measure-Command { $ListOfComputers =  $OUObjects.Where({$_.properties.objectcategory -like "*computer*"}) }
-$CanonicalNameOfDomain = Get-DomainNameFromDistinguishedName -DistinguishedName $OU
+$CanonicalNameOfDomain = Get-DomainNameFromDistinguishedName -DistinguishedName $OU -DomainName $domain
 
 $ComputerCount = $ListOfComputers.count
 Write-Verbose "Found $($ListOfComputers.count) computer objects in $($ListOfComputersTimer.TotalSeconds) seconds"
@@ -422,7 +477,11 @@ if ($LogFile){
 }
 
 if ($Site){
-    $BuildCUTreeParams.Add("SiteId",$Site)
+    $BuildCUTreeParams.Add("SiteName",$Site)
+}
+
+if ($Force){
+    $BuildCUTreeParams.Add("Force",$true)
 }
 
 if ($batchCreateFolders){
