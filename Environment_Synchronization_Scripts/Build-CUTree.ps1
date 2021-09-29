@@ -21,6 +21,7 @@
         @guyrleech 2021-08-13   Added checking and more logging for CU Monitor service state
         @guyrleech 2021-08-16   Changed service checking as was causing access denied errors
         @Wouter Kursten 2021-09-14  Added -dnsname to add-cucomputer lines to reflect the dnsname variable in the computer objects
+	@steveschneider 2021-09-29 Line 662 added "-and $FoldersToRemoveCount" so it doesn't try deleting null values for folders if no folders exist
 #>
 
 <#
@@ -659,7 +660,7 @@ function Build-CUTree {
         #we'll output the statistics at the end -- also helps with debugging
         $FoldersToRemove = New-Object System.Collections.Generic.List[PSObject]
         
-        if ($Delete) {
+        if ($Delete -and $FoldersToRemoveCount) {
             Write-CULog "Determining Objects to be Removed" -ShowConsole
 	        # Build batch for folders which are in ControlUp but not in the external source
 <#
