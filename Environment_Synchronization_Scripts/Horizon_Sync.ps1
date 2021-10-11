@@ -236,6 +236,7 @@ function Connect-HorizonConnectionServer {
     )
     # Try to connect to the Connection server
     try {
+   	 Set-PowerCLIConfiguration -InvalidCertificateAction ignore
         Connect-HVServer -Server $HVConnectionServerFQDN -Credential $Credential
     }
     catch {
