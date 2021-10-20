@@ -660,7 +660,7 @@ function Build-CUTree {
         #we'll output the statistics at the end -- also helps with debugging
         $FoldersToRemove = New-Object System.Collections.Generic.List[PSObject]
         
-        if ($Delete -and $FoldersToRemoveCount) {
+        if ($Delete) {
             Write-CULog "Determining Objects to be Removed" -ShowConsole
 	        # Build batch for folders which are in ControlUp but not in the external source
 <#
@@ -690,7 +690,7 @@ function Build-CUTree {
                 if( $ExtFolderPaths.Where( { $_.FolderPath -match "^$folderRegex$" -or $_.FolderPath -match "^$folderRegex\\" } ).Count -eq 0 -and $CUFolder -ne $CURootFolder ) {
                 ## can't use a simple -notin as path may be missing but there may be child paths of it - GRL
     	        ##if (($CUFolder -notin $ExtFolderPaths.FolderPath) -and ($CUFolder -ne $("$CURootFolder"))) { #prevents excluding the root folder
-                    if ($Delete) {
+                    if ($Delete -and $CUFolder) {
                         if ($FoldersToRemoveCount -ge $maxFolderBatchSize) {  ## we will execute computer batch operations $maxBatchSize at a time
                             Write-Verbose "Generating a new remove folder batch"
                             $FoldersToRemoveBatches.Add($FoldersToRemoveBatch)
