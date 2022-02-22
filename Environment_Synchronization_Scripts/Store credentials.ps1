@@ -1,4 +1,4 @@
-﻿#requires -Version 3.0
+#requires -Version 3.0
 
 <#
     .SYNOPSIS
@@ -23,6 +23,7 @@
                             08/12/2020 - Added parameter sets with option for PSCredential object passing (pass as $null to prompt for credentials)
                             07/06/2021 - Merged Azure credentials script
                             20/08/2021 - Added API client for Citrix Cloud
+                            20/08/2021 - Added multi-tenant support for Azure
 
     Changelog ;
         Second Version
@@ -90,6 +91,8 @@ Param
     [string]$applicationId ,
     [Parameter(Mandatory,ParameterSetName='Azure',HelpMessage='Service Principal Application (client) secret')]
     [string]$applicationSecret ,
+    [Parameter(ParameterSetName='Azure',HelpMessage='Put tenant id in file name not the file')]
+    [switch]$TenantIdInFileName ,
 
     [Parameter(Mandatory=$false,ParameterSetName='CitrixCloud', HelpMessage='Citrix Cloud API client id' )]
     [ValidateNotNullOrEmpty()]
@@ -172,13 +175,14 @@ Function New-CUStoredCredential {
         [string]$tenantId,
         [parameter(Mandatory = $true,
             HelpMessage = "The system the credentials will be used for.")]
-        [string]$System
+        [string]$System ,
+        [parameter(Mandatory = $false,
+            HelpMessage = 'Put tenant id in file name not the file')]
+        [switch]$TenantIdInFileName 
     )
-    # Username and password correct, check if target folder exists and create it if necessary
-    
+
     $strCredTargetFolder = [System.IO.Path]::Combine( [Environment]::GetFolderPath( [Environment+SpecialFolder]::CommonApplicationData ) , 'ControlUp' , 'ScriptSupport' )
 
-    # Create the folder if it does not exist
     If ( ! (Test-Path -Path $strCredTargetFolder -ErrorAction SilentlyContinue)) {
         Write-Output "Folder does not exist"
         try {
@@ -203,7 +207,14 @@ Function New-CUStoredCredential {
     }
 
     if( $Cred ) {
-        [string]$credsfile = [System.IO.Path]::Combine( $strCredTargetFolder , ( $Env:Username + '_' + $System + '_Cred.xml' ) )
+        [string]$credsfile = $(if( $TenantIdInFileName )
+            {
+                [System.IO.Path]::Combine( $strCredTargetFolder , ( $Env:Username + '_' + $tenantId + '_' + $System + '_Cred.xml' ) )
+            }
+            else
+            {
+                [System.IO.Path]::Combine( $strCredTargetFolder , ( $Env:Username + '_' + $System + '_Cred.xml' ) )
+            })
         Write-Verbose -Message "Writing credentials to file `"$credsfile`""
 
         # Store the PSCredential object or the Azure details
@@ -225,9 +236,11 @@ Function New-CUStoredCredential {
                 }
                 else
                 {
-                    $export = @{
-                        'tenantID' = $tenantID
-                        'spCreds' = $cred }
+                    $export = @{ 'spCreds' = $cred }
+                    if( -Not $TenantIdInFileName )
+                    {
+                        $export.Add( 'tenantID' , $tenantID)
+                    }
                 }
             }
             if( $export )
@@ -252,7 +265,7 @@ if( ! (Get-CimInstance -Classname win32_userprofile | Where-Object localpath -eq
 
 If ( $credentialType -match 'Azure' ) {
     if( $PsCmdlet.ParameterSetName -eq 'Azure' ) {
-        New-CUStoredCredential -Username $applicationId -Password $applicationSecret -System $credentialType -TenantId $tenantId
+        New-CUStoredCredential -Username $applicationId -Password $applicationSecret -System $credentialType -TenantId $tenantId -TenantIdInFileName:$TenantIdInFileName
     }
     else {
         Out-CUConsole -Message "Wrong parameters used for $credentialType credential type - use -applicationId, -applicationSecret & -tenantId" -Stop
