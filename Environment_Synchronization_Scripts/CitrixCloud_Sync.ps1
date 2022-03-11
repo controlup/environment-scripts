@@ -1,50 +1,45 @@
-<#
-Prereqs: Please create the folder in controlup that is in the $cuDGFolder variable prior to running
-You can override your domain with the $domainOverride variable if you want to test this in a test environment.
-#>
-
 [CmdletBinding()]
 Param(
-    [Parameter(Mandatory=$false, HelpMessage='Enter a ControlUp subfolder to save your AD tree to')]
-    [ValidateNotNullOrEmpty()]
-    [string] $folderPath,
+	[Parameter(Mandatory=$false, HelpMessage='Enter a ControlUp subfolder to save your DeliveryGroup tree to')]
+	[ValidateNotNullOrEmpty()]
+	[string] $folderPath,
 
-    [Parameter(Mandatory=$false, HelpMessage='Enter the Distinguished Name of the OU to sync')]
-    [ValidateNotNullOrEmpty()]
-    [string] $clientID,
-	
-	[Parameter(Mandatory=$false, HelpMessage='Enter the Distinguished Name of the OU to sync')]
-    [ValidateNotNullOrEmpty()]
-    [string] $secretKey,
-	
-	[Parameter(Mandatory=$false, HelpMessage='Enter the Distinguished Name of the OU to sync')]
-    [ValidateNotNullOrEmpty()]
-    [string] $cloudEnvironmentName,
-    
-    [Parameter(Mandatory=$false, HelpMessage='Domain to query if not the default')]
-    [ValidateNotNullOrEmpty()]
-    [string] $forceDomain,
+	[Parameter(Mandatory=$false, HelpMessage='Enter the Citrix Cloud Client ID')]
+	[ValidateNotNullOrEmpty()]
+	[string] $clientID,
 
-    [Parameter(Mandatory=$false, HelpMessage='Preview the changes' )]
-    [ValidateNotNullOrEmpty()]
-    [switch] $Preview,
+	[Parameter(Mandatory=$false, HelpMessage='Enter the Citrix Cloud Secret Key')]
+	[ValidateNotNullOrEmpty()]
+	[string] $secretKey,
 
-    [Parameter(Mandatory=$false, HelpMessage='Execute removal operations. When combined with preview it will only display the proposed changes')]
-    [ValidateNotNullOrEmpty()]
-    [switch] $Delete,
+	[Parameter(Mandatory=$false, HelpMessage='Enter the Citrix Cloud Customer ID')]
+	[ValidateNotNullOrEmpty()]
+	[string] $cloudEnvironmentName,
 
-    [Parameter(Mandatory=$false, HelpMessage='Enter a path to generate a log file of the proposed changes')]
-    [ValidateNotNullOrEmpty()]
-    [string] $LogFile,
+	[Parameter(Mandatory=$false, HelpMessage='Domain to force on the CU object')]
+	[ValidateNotNullOrEmpty()]
+	[string] $forceDomain,
 
-    [Parameter(Mandatory=$false, HelpMessage='Enter a ControlUp Site Name' )]
-    [ValidateNotNullOrEmpty()]
-    [string] $Site ,
+	[Parameter(Mandatory=$false, HelpMessage='Preview the changes' )]
+	[ValidateNotNullOrEmpty()]
+	[switch] $Preview,
 
-    [Parameter(Mandatory=$false, HelpMessage='Create folders in batches rather than individually')]
+	[Parameter(Mandatory=$false, HelpMessage='Execute removal operations. When combined with preview it will only display the proposed changes')]
+	[ValidateNotNullOrEmpty()]
+	[switch] $Delete,
+
+	[Parameter(Mandatory=$false, HelpMessage='Enter a path to generate a log file of the proposed changes')]
+	[ValidateNotNullOrEmpty()]
+	[string] $LogFile,
+
+	[Parameter(Mandatory=$false, HelpMessage='Enter a ControlUp Site Name' )]
+	[ValidateNotNullOrEmpty()]
+	[string] $Site ,
+
+	[Parameter(Mandatory=$false, HelpMessage='Create folders in batches rather than individually')]
 	[switch] $batchCreateFolders ,
 
-    [Parameter(Mandatory=$false, HelpMessage='Force folder creation if number exceeds safe limit')]
+	[Parameter(Mandatory=$false, HelpMessage='Force folder creation if number exceeds safe limit')]
 	[switch] $force
 ) 
 # PS Module Import
@@ -100,7 +95,7 @@ class ControlUpObject{
 
 $body = @{grant_type = "client_credentials";client_id = $id;client_secret = $secret}
 
-$token = ((Invoke-webrequest "https://api-us.cloud.com/cctrustoauth2/$customerID/tokens/clients" -Method POST -body $body).content|convertfrom-json).access_token
+$token = ((Invoke-webrequest "https://api-us.cloud.com/cctrustoauth2/$customerID/tokens/clients" -Method 'POST' -body $body).content|convertfrom-json).access_token
 
 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $null
 $h = New-Object "System.Collections.Generic.Dictionary[[String],[String]]"
@@ -146,7 +141,6 @@ foreach ($machine in $machines){
 		$am++
 		$Environment.Add(([ControlUpObject]::new( $name , "$dg","Computer", $Domain ,"Citrix Cloud Machine", $dns )))
 }
-
 
 function Build-CUTree {
     [CmdletBinding()]
