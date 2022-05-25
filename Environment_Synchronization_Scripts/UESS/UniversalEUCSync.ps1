@@ -107,8 +107,8 @@ if($save){
 	
 	New-Item -ItemType Directory -Force -Path $exportPath |out-null
 	$config|convertto-json|Out-File -FilePath "$exportPath\Universal_EUC_Sync.cfg" -Force
-	if(!(test-path "$exportPath\sitemap.cfg"){$null|Out-File -FilePath "$exportPath\sitemap.cfg" -Force}
-	if(!(test-path "$exportPath\map.cfg"){$null|Out-File -FilePath "$exportPath\map.cfg" -Force}
+	if(!(test-path "$exportPath\sitemap.cfg")){$null|Out-File -FilePath "$exportPath\sitemap.cfg" -Force}
+	if(!(test-path "$exportPath\map.cfg")){$null|Out-File -FilePath "$exportPath\map.cfg" -Force}
 	$config|convertto-json|Out-File -FilePath "$exportPath\Universal_EUC_Sync.cfg" -Force
 	
 	$configImport = get-content "$exportPath\Universal_EUC_Sync.cfg"|convertfrom-json
