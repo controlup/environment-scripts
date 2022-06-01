@@ -65,6 +65,13 @@ function siteMap {
 	return $siteGuid
 }
 
+function fixPathCase{
+$path = $args[0]
+	foreach($name in $global:FolderNameCase){
+		$path = $path.replace($name.toLower(),$name)
+	}
+return $path
+}
 #########################################
 ######## Save and Import Config #########
 #########################################
@@ -165,6 +172,8 @@ $eucFolder = [System.Collections.ArrayList]@()
 $global:eucDisconnected = [System.Collections.ArrayList]@()
 $removedEUC = [System.Collections.ArrayList]@()
 $maxValue = [int32]::MaxValue
+$global:FolderNameCase = [System.Collections.ArrayList]@()
+(Invoke-CUQuery -Fields "Name" -Scheme "Main" -Table "Folders" -Focus "$root\EUC Environments").data.name|%{$global:FolderNameCase.add($_)|out-null}
 
 if($addBrokers){
 	#Adding cloud connectorss, connection servers, delivery controllers
@@ -297,7 +306,8 @@ foreach ($item in $data){
 		$folder = $folderPath.TrimEnd("\")
 		$folder = $folder.replace("$rootPath\","")
 		$site = siteMap "$($item.sname)$folder"
-		$Environment.Add(([ControlUpObject]::new($item.sname, $folder ,"Computer", $Domain ,"Added by Sync Script", $resolveDNS,$site)))
+		$name = $item.sname.split(".")[0]
+		$Environment.Add(([ControlUpObject]::new($name, $folder ,"Computer", $Domain ,"Added by Sync Script", $resolveDNS,$site)))
 	}
 }
 
@@ -317,10 +327,12 @@ foreach ($path in $folderList){
 
 $uniqueFolders = ($foldersToAdd|?{$_ -ne $root -and $_ -ne $rootPath})|sort -unique
 foreach ($folder in $uniqueFolders){
-	$folderName = $folder.split("\")[-1]
-	$addFolderTo = $folder.replace("$rootPath\","")
+	$folderName = fixPathCase $folder.split("\")[-1]
+	$addFolderTo = fixPathCase $folder.replace("$rootPath\","")
+	#write-host "Name: $folderName -> $addfolderTo"
 	$Environment.Add([ControlUpObject]::new($FolderName,$addFolderTo,"Folder",$null,$null,$null,$null))
 }
+
 $tsEnd = get-date
 $time = new-timespan -start $tsStart -end $tsEnd
 if($VerbosDebug){Write-CULog -Msg "Time it took to build Object: $($time.TotalSeconds) seconds." -ShowConsole -color Yellow}
