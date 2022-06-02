@@ -54,7 +54,7 @@ $batchCreateFolders = $true
 #citrixCloud ClientID and SecretKey
 $id=''
 $secret=''
-$cloudEnvironment = ''
+$cloudEnvironmentName = ''
 
 #Override Pesets with commandline args
 if($clientID){$id = $clientID}
