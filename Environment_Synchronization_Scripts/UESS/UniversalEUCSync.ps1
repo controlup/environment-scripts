@@ -4,10 +4,9 @@ Param(
 	[Parameter(Mandatory=$false)][string]$Exclude,
 	[Parameter(Mandatory=$false)][string]$AddBrokers,
 	[Parameter(Mandatory=$false)][string]$Delete,
-	[Parameter(Mandatory=$false)][string]$Force,
-	[Parameter(Mandatory=$false)][string]$Domain,
 	[Parameter(Mandatory=$false)][string]$Preview,
 	[Parameter(Mandatory=$false)][string]$VerbosDebug,
+	[Parameter(Mandatory=$false)][string]$GetHelp,
 	[Parameter(Mandatory=$false)][string]$SaveConfig
 )
 
@@ -38,24 +37,72 @@ Param(
     }
 }
 
-function Remap{
+function Delete-Files {
+Param(
+	[Parameter(Mandatory=$false)][string]$Path,
+	[Parameter(Mandatory=$false)][int32]$OlderThanDays,
+	[Parameter(Mandatory=$false)][string]$extension
+)
+
+if($path[-1] -ne '\'){$path = "$path\"}
+Get-Item "$path*$extension"|?{$_.lastwritetime -le (get-date).addDays(-($OlderThanDays))}|remove-item -force
+}
+
+function folderRemap{
 #Remaps the path to the new path based on filters
 	$path = $args[0]
-	foreach ($map in $global:maps){
+	foreach ($map in $global:folderMaps){
 		$map = $map.split(',')
-		$path = $path.replace($map[0],$map[1].trim()).replace('\\','')
+		$path = $path.replace($map[0].toLower(),$map[1].trim()).replace('\\','\')
 	}
 	return $path
+}
+
+function dnsMap{
+#Maps DNS Based on the DNS Mapping file, if needed.
+Param(
+	[Parameter(Mandatory=$false)][string]$guestHostName,
+	[Parameter(Mandatory=$false)][string]$Folder
+)
+
+	if($global:DnsMaps){
+	#Mapping File Exists and loop through to find matches
+		foreach ($map in $global:DnsMaps){
+			$map = $map.split(',')
+			if($folder -like "*$($map[0])*"){
+				#Folder Match found, setting the DNS record on the computer object
+				if($guestHostName.indexOf('.') -gt 0){
+					$guestHostName = "$($guestHostName.split('.')[0]).$($map[1])"
+				}else{
+					$guestHostName = "$guestHostName.$($map[1])"
+				}
+			return $guestHostName
+			}
+			
+			if($guestHostName.indexOf('.') -gt 0 -and $guestHostName -like "*$($map[0])*"){
+				#Machine Match Found, Setting the DNS record on the computer object
+				$guestHostName = "$($guestHostName.split('.')[0]).$($map[1])"
+				return $guestHostName
+			}			
+		}
+	}
+		if($guestHostName.indexOf('.') -le 0){
+			$GHN = [System.Net.Dns]::GetHostByName($guestHostName).HostName
+			if(!$GHN){$GHN = "$guestHostName.$($global:defaultDomain)"}
+			$guestHostName = $GHN
+		}
+		return $guestHostName
+	
 }
 
 function siteMap {
 #Filters Computer and Site names to math paths
 	$path = $args[0] + $args[1]
 		if ($global:SiteMaps){
-			foreach ($map in $global:SiteMaps){
+			foreach ($map in $global:SiteMaps.toLower()){
 				$map = $map.split(',')
 				$sMap = $map[1].trim()
-				if($path -like "*$($map[0])*"){
+				if($path.toLower() -like "*$($map[0].toLower())*"){
 					$site = if($global:cuSites|?{$_.name -eq $sMap}){$sMap}
 					break
 				}else{$site = "Default"}
@@ -66,11 +113,10 @@ function siteMap {
 }
 
 function fixPathCase{
-$path = $args[0]
-	foreach($name in $global:FolderNameCase){
-		$path = $path.replace($name.toLower(),$name)
-	}
-return $path
+#Replaces every folder name with the proper case from the EUC tree
+	$path = $args[0]
+	foreach($name in $global:FolderNameCase){$path = $path.replace($name.toLower(),$name)}
+	return $path
 }
 #########################################
 ######## Save and Import Config #########
@@ -93,8 +139,6 @@ New-Item -ItemType Directory -Force -Path "$exportPath\Logs" |out-null
 [Array]$ExcludedWords = if($Exclude){$Exclude.split(",")}else{$null}
 [bool]$addBrokers = if($addBrokers.toLower()[0] -eq "y"){$true}else{$false}
 [bool]$Delete = if($Delete.toLower()[0] -eq "y"){$true}else{$false}
-[bool]$Force = if($Force.toLower()[0] -eq "y"){$true}else{$false}
-[String]$DomainOverride = if($Domain.toLower() -ne "no"){$Domain}else{$null}
 [bool]$Preview = if($Preview.ToLower()[0] -eq "y"){$false}else{$true}
 [bool]$VerbosDebug = if($VerbosDebug.ToLower()[0] -eq "y"){$true}else{$false}
 [bool]$save = if($saveConfig.ToLower()[0] -eq "y"){$true}else{$false}
@@ -105,27 +149,40 @@ if($save){
 		SyncFolder = $syncFolder; 
 		Excludes = $Exclude;
 		AddBrokers = $addBrokers;
-		Force = $Force;
-		DomainOverride = $DomainOverride;
 		delete = $delete;
 		Preview = $preview;
 		VerbosDebug = $VerbosDebug;
 	}
-	
+	$e = $null
+	try{
 	New-Item -ItemType Directory -Force -Path $exportPath |out-null
 	$config|convertto-json|Out-File -FilePath "$exportPath\Universal_EUC_Sync.cfg" -Force
-	if(!(test-path "$exportPath\sitemap.cfg")){$null|Out-File -FilePath "$exportPath\sitemap.cfg" -Force}
-	if(!(test-path "$exportPath\map.cfg")){$null|Out-File -FilePath "$exportPath\map.cfg" -Force}
+	if(!(test-path "$exportPath\dns_map.cfg")){$null|Out-File -FilePath "$exportPath\dns_map.cfg" -Force}
+	if(!(test-path "$exportPath\site_map.cfg")){$null|Out-File -FilePath "$exportPath\site_map.cfg" -Force}
+	if(!(test-path "$exportPath\folder_map.cfg")){$null|Out-File -FilePath "$exportPath\folder_map.cfg" -Force}
 	$config|convertto-json|Out-File -FilePath "$exportPath\Universal_EUC_Sync.cfg" -Force
-	
+	}catch{
+		$e = $_
+		if($e){
+			if($VerbosDebug){
+				Write-CULog -Msg "Error Saving file. Error thrown:" -ShowConsole -color Magenta
+				Write-CULog -Msg $e -ShowConsole -color Magenta
+			}else{
+				Write-CULog -Msg "Error Saving file. Error thrown:"
+				Write-CULog -Msg $e
+			}
+			throw "Please contact support@controlup.com to help diagnose this issue"
+		}
+	}
 	$configImport = get-content "$exportPath\Universal_EUC_Sync.cfg"|convertfrom-json
 	write-host "Configuration Saved. Please validate the following settings before finalizing: `n`n $($configImport|out-string) Exiting Script, To finalize please change 'Save Configuration File' to No'"
 	exit
 }
 
 if (test-path "$exportPath\Universal_EUC_Sync.cfg"){$configImport = get-content "$exportPath\Universal_EUC_Sync.cfg"|convertfrom-json}
-if (test-path "$exportPath\Map.cfg"){$global:maps = get-content "$exportPath\Map.cfg"}else{$null|Out-File -FilePath "$exportPath\map.cfg" -Force}
-if (test-path "$exportPath\SiteMap.cfg"){$global:SiteMaps = get-content "$exportPath\SiteMap.cfg"}else{$null|Out-File -FilePath "$exportPath\sitemap.cfg" -Force}
+if (test-path "$exportPath\folder_map.cfg"){$global:folderMaps = get-content "$exportPath\folder_map.cfg"}else{$null|Out-File -FilePath "$exportPath\folder_map.cfg" -Force}
+if (test-path "$exportPath\dns_map.cfg"){$global:DnsMaps = get-content "$exportPath\dns_map.cfg"}else{$null|Out-File -FilePath "$exportPath\dns_map.cfg" -Force}
+if (test-path "$exportPath\site_map.cfg"){$global:SiteMaps = get-content "$exportPath\site_map.cfg"}else{$null|Out-File -FilePath "$exportPath\site_map.cfg" -Force}
 if(!$configImport -and !$save){write-host "Please save a configuration before running the script";exit}
 if($configImport -and !$save){
 #import Config File
@@ -135,10 +192,9 @@ if($configImport -and !$save){
 	[bool]$preview = $configImport.Preview
 	[bool]$VerbosDebug = $configImport.VerbosDebug
 	[bool]$addBrokers = $configImport.AddBrokers
-	[bool]$Force = $configImport.Force
 	$DomainOverride = if($configImport.DomainOverride){$configImport.DomainOverride}
 }
-
+#$VerbosDebug = $true
 $query = New-Object -TypeName System.Collections.Generic.List[PSObject]
 class machines{
     [string]$ParentFolderPath
@@ -158,8 +214,9 @@ if(!$syncFolder){throw "No sync folder found. `n`nPlease use arguments or the co
 #########################################
 
 $global:sf = $syncFolder
+$global:defaultDomain = [DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain().name
 $root = (Get-CUFolders)[0].name.toLower()
-$rootPath = "$root\$syncFolder"
+$rootPath = if(($syncFolder.toLower()) -like "$($root.toLower())*"){$syncFolder}else{"$root\$syncFolder"}
 #array List
 $iq = [System.Collections.ArrayList]@()
 $names = [System.Collections.ArrayList]@()
@@ -170,9 +227,12 @@ $data = [System.Collections.ArrayList]@()
 $noAdd = [System.Collections.ArrayList]@()
 $eucFolder = [System.Collections.ArrayList]@()
 $global:eucDisconnected = [System.Collections.ArrayList]@()
-$removedEUC = [System.Collections.ArrayList]@()
+$EUCCon = [System.Collections.ArrayList]@()
+$Global:BadDomains = [System.Collections.ArrayList]@()
+$Global:GoodDomains = [System.Collections.ArrayList]@()
 $maxValue = [int32]::MaxValue
 $global:FolderNameCase = [System.Collections.ArrayList]@()
+$global:OriginalPaths = @{}
 (Invoke-CUQuery -Fields "Name" -Scheme "Main" -Table "Folders" -Focus "$root\EUC Environments").data.name|%{$global:FolderNameCase.add($_)|out-null}
 
 if($addBrokers){
@@ -195,8 +255,14 @@ if($VerbosDebug){Write-CULog -Msg "Put all query machines into an object for eas
 else{Write-CULog -Msg "Put all query machines into an object for easy processing"}
 foreach ($q in $iq){
 	foreach ($item in $q){
-		if($item.ParentFolderPath){$path =remap $item.ParentFolderPath}
-		if($item.xdBrokerFolderPath){$path = remap $item.xdBrokerFolderPath}
+		if($item.ParentFolderPath){
+			$path = folderRemap $item.ParentFolderPath
+			$global:OriginalPaths.add($item.sname ,$item.ParentFolderPath)
+		}
+		if($item.xdBrokerFolderPath){
+			$path = folderRemap $item.xdBrokerFolderPath
+			$global:OriginalPaths.add($item.sname ,$item.xdBrokerFolderPath)
+		}
 		$query.Add([machines]::new($path,$item.sname,$item.GuestHostName))|out-null
 	}
 }
@@ -215,21 +281,23 @@ else{Write-CULog -Msg "if EUC folder is disconnected, do not remove machines"}
 foreach ($folder in $eucConnected){
 	$s = $folder.ParentFolderPath.split("\")
 	$eucFolder.remove("$($s[0])\$($s[1])\$($s[2])")
-	$removedEUC.add("$($s[0])\$($s[1])\$($s[2])")|out-null
+	$EUCCon.add("$($s[0])\$($s[1])\$($s[2])")|out-null
 }
-$disconnected = $removedEUC|sort -unique|out-string
-if($VerbosDebug){Write-CULog -Msg "Disconnected: $($Disconnected)" -ShowConsole -SubMsg -Color Red}
-else{Write-CULog -Msg "Disconnected: $($Disconnected)"}
+$Connected = $EUCCon|sort -unique|out-string
+
+if($VerbosDebug){Write-CULog -Msg "Connected:`n $($Connected)" -ShowConsole -Color Cyan}
+else{Write-CULog -Msg "Connected:`n $($Connected)"}
 
 #Remaps every folder to where they will belong, this is from the Map.cfg
 if($VerbosDebug){Write-CULog -Msg "Remaps every folder to where they will belong, this is from the Map.cfg" -ShowConsole -color Green}
 else{Write-CULog -Msg "Remaps every folder to where they will belong, this is from the Map.cfg"}
 $eucFolder|%{
 	$ex = $_.split("\")
-	$map = if($global:maps){remap "$rootPath\$($ex[2])".toLower()}else{"$rootPath\$($ex[2])".toLower()}
+	$map = if($global:folderMaps){folderRemap "$rootPath\$($ex[2])".toLower()}else{"$rootPath\$($ex[2])".toLower()}
 	$global:eucDisconnected.Add($map)|out-null
 }
-
+if($VerbosDebug){Write-CULog -Msg "Disconnected:`n $($global:eucDisconnected)" -ShowConsole -Color Red}
+else{Write-CULog -Msg "Disconnected:`n $($global:eucDisconnected)"}
 
 #Exclude Folders/Machines/Prefixes/Whatever
 if($VerbosDebug){Write-CULog -Msg "Exclude Folders/Machines/Prefixes" -ShowConsole -color Green}
@@ -285,29 +353,39 @@ else{Write-CULog -Msg "Creating Machines Object, be patient this could take some
 
 foreach ($item in $data){
 	#Get FQDN for machine
-	if(!$DomainOverride){
-		$resolveDNS = $null
-		if($force){
-			try{$resolveDNS = [System.Net.Dns]::GetHostByName($item.sName).hostname}catch{}
-		}else{
-			if(![string]::IsNullOrEmpty($item.guesthostname)){
-				$resolveDNS = $item.guesthostname
-			}else{
-				try{$resolveDNS = [System.Net.Dns]::GetHostByName($item.sName).hostname}catch{}
-			}
-		}
-	}
-	
-	if(![string]::IsNullOrEmpty($resolveDNS) -or ![string]::IsNullOrEmpty($DomainOverride)){
-		if($DomainOverride){$Domain = $DomainOverride}else{$Domain = $resolveDNS.substring($resolveDNS.indexof(".")+1)}
+		$dnsName = $null
 		if ($item.ParentFolderPath){$folderPath = ($item.ParentFolderPath).replace("euc environments",$syncFolder)}
-		
 		$folderList.Add($folderPath.TrimEnd("\"))|out-null
 		$folder = $folderPath.TrimEnd("\")
+		$m = $item.sname.TrimEnd("\")
+		$ogPath = $global:OriginalPaths.$m
+		$site = siteMap "$ogPath\$($item.sname)"
 		$folder = $folder.replace("$rootPath\","")
-		$site = siteMap "$($item.sname)$folder"
+		
 		$name = $item.sname.split(".")[0]
-		$Environment.Add(([ControlUpObject]::new($name, $folder ,"Computer", $Domain ,"Added by Sync Script", $resolveDNS,$site)))
+		$guesthostname = if($item.sname -like "*.*"){$item.sname}else{$item.GuestHostName}
+
+		if($guesthostname){$dnsName = dnsMap -guestHostName $guesthostname -folder $folder}else{$dnsName = dnsMap -guestHostName $name -folder $folder}
+		
+		if($dnsName -like "*.*"){
+			$Domain = $dnsName.substring($dnsName.indexof(".")+1)
+			if($domain -notin $global:BadDomains -and $domain -notin $global:GoodDomains){
+				$domainResponse = $null
+				$domainResponse = ([ADSI]"LDAP://$domain").path
+				if($domainResponse){
+					$global:GoodDomains.add($domain)|out-null
+				}else{
+					$global:BadDomains.add($domain)|out-null
+				}
+			}
+			if($domain -in $global:BadDomains){$domain = $global:defaultDomain}
+			
+		}else{
+			$Domain = $global:defaultDomain
+		}
+		
+	if($dnsName){
+		$Environment.Add(([ControlUpObject]::new($name, $folder ,"Computer", $Domain ,"Added by Sync Script",$dnsName,$site)))
 	}
 }
 
@@ -735,7 +813,7 @@ function Build-CUTree {
     	        ##if (($CUFolder -notin $ExtFolderPaths.FolderPath) -and ($CUFolder -ne $("$CURootFolder"))){ #prevents excluding the root folder
                     	$s = $CUFolder.split("\")
 						if("$($s[0])\$($s[1])\$($s[2])".toLower() -in $global:eucDisconnected){$skip = $true}else{$skip = $false}
-						#write-host "$skip - " + "$($s[0])\$($s[1])\$($s[2])"
+						write-host "$skip - " + "$($s[0])\$($s[1])\$($s[2])"
 						if ($Delete -and $CUFolder -and !$Skip){
 							if ($FoldersToRemoveCount -ge $maxFolderBatchSize){  ## we will execute computer batch operations $maxBatchSize at a time
 								Write-Verbose "Generating a new remove folder batch"
@@ -838,6 +916,10 @@ function Build-CUTree {
 ############################
 #####  End BuildCUTree  ####
 ############################
+
+#delete Logs Older Than 30 days
+Delete-Files -Path "$exportPath\Logs" -OlderThanDays 30 -extension "log"
+
 
 #Kicking off Build CUTree 
 if($debug){Write-CULog -Msg "Starting BuildCUTree, this could also take some time" -ShowConsole}
