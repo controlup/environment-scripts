@@ -6,4 +6,4 @@ You can continuously monitor the actual machines in your environment and remedia
 
 - Our sync scripts are written in PowerShell and stored in this GitHub repository.
 - Depending on your VDI, you may have to run special credentials scripts to enable running the sync scripts. These are detailed in the [knowledge base articles](https://support.controlup.com/hc/en-us) covering each environment.
-You set the Windows scheduled task to automatically run the sync script on the ControlUp monitor machine. This procedure is detailed [here](https://support.controlup.com/hc/en-us/articles/360015854278).
+You set the Windows scheduled task to automatically run the sync script on the ControlUp monitor machine. This procedure is detailed [here](https://support.controlup.com/docs/auto-sync-environment-changes-into-controlup-s-organizational-tree).
