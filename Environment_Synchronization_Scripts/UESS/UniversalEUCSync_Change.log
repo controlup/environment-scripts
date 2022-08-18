@@ -1,0 +1,24 @@
+known issues:
+Error handling for security policies
+
+Finding nested euc connections in folders, use this
+-- (Invoke-CUQuery -Scheme "Cluster" -table "PartitionToRecord" -Fields "Name","ItemType" -where "ItemType=6" -take $MaxValue).data
+
+
+changelog:
+2022-06-24 - Added error handling for saving config
+2022-06-24 - Site Mapping Fixed
+
+
+2022-07-25 - check to see if syncing to special folders, hypervisors, euc environments etc
+2022-07-25 - Log file location move to config file, not settable by param
+2022-07-25 - Log file duration move to config file, not settable by param
+2022-07-25 - Add powershell 5.1 check
+2022-07-25 - Event Event Log Creation
+2022-07-25 - Updated module import to look at the imagepath of the service
+2022-07-29 - Finding nested euc connections in folders
+
+2022-08-17 - Fixed Folder Mapping to ignore case and properly replace with slashes
+2022-08-17 - Fixed weird nesting issue where it adds in the sync folder path inside the sync folder path
+2022-08-17 - Enhanced buildCUTree Code
+2022-08-17 - Enhanced Folder Creation Speed
