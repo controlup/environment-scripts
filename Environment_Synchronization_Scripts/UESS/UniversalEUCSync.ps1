@@ -313,6 +313,7 @@ foreach ($q in $iq){
 			$path = folderRemap $item.xdBrokerFolderPath
 			$global:OriginalPaths.add($item.sname ,$item.xdBrokerFolderPath)
 		}
+
 		$query.Add([machines]::new($path,$item.sname,$item.GuestHostName))|out-null
 	}
 }
@@ -478,7 +479,7 @@ $foldersToAdd.Add($rootPath.TrimEnd("\"))|out-null
 
 foreach ($path in $folderList){
 	if($path -ne $rootPath){
-		$exploded = ($path.replace($rootPath.toLower(),"")).split("\")
+		$exploded = $path.split("\")
 		for ($i = 0; $i -lt $exploded.count; $i++) {
 			$folderadd = if($i -eq 0){$exploded[$i]}else{$foldersToAdd[-1] + "\$($exploded[$i])".TrimEnd("\")}
 			$foldersToAdd.Add($folderadd)|out-null
@@ -490,7 +491,6 @@ foreach ($path in $folderList){
 
 $remPath = $orgName.tolower()
 foreach ($f in ($syncFolder.split('\'))){
-	$remPath = "$remPath\$f"
 	$uniqueFolders.Remove($remPath)
 }
 
@@ -864,3 +864,4 @@ if ($Preview){$BuildCUTreeParams.Add("Preview",$true)}
 if ($Delete){$BuildCUTreeParams.Add("Delete",$true)}
 if ($LogFile){$BuildCUTreeParams.Add("LogFile",$LogFile)}
 [int]$errorCount = Build-CUTree -ExternalTree $Environment @BuildCUTreeParams
+

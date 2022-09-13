@@ -156,6 +156,7 @@ try {
 
 if(!$global:isAdmin){Write-CULog -Msg "User is not Local Admin, this may cause some errors with writing to event log and saving to %ProgramData%" -ShowConsole -Type W}
 
+[String]$orgName = (Get-CUFolders|?{$_.FolderType -eq "RootFolder"}).name
 [String]$syncFolder = $FolderPath
 [String]$Exclude = if($Exclude.toLower() -ne "no"){$Exclude}else{$null}
 [Array]$ExcludedWords = if($Exclude){$Exclude.split(",")}else{$null}
@@ -264,7 +265,7 @@ $global:eucConnected = [System.Collections.ArrayList]@()
 $global:eucFList = [System.Collections.ArrayList]@()
 
 ##Non-Globals
-$root = (Get-CUFolders)[0].name.toLower()
+$root = $orgName
 $rootPath = if(($syncFolder.toLower()) -like "$($root.toLower())*"){$syncFolder}else{"$root\$syncFolder"}
 
 ##array List
@@ -278,6 +279,7 @@ $noAdd = [System.Collections.ArrayList]@()
 $eucFolder = [System.Collections.ArrayList]@()
 $eucNames = [System.Collections.ArrayList]@()
 $EUCCon = [System.Collections.ArrayList]@()
+$uniqueFolders = [System.Collections.ArrayList]@()
 
 $maxValue = [int32]::MaxValue
 
@@ -311,6 +313,7 @@ foreach ($q in $iq){
 			$path = folderRemap $item.xdBrokerFolderPath
 			$global:OriginalPaths.add($item.sname ,$item.xdBrokerFolderPath)
 		}
+
 		$query.Add([machines]::new($path,$item.sname,$item.GuestHostName))|out-null
 	}
 }
@@ -440,7 +443,7 @@ foreach ($item in $data){
 		$m = $item.sname.TrimEnd("\")
 		$ogPath = $global:OriginalPaths.$m
 		$site = siteMap "$ogPath\$($item.sname)"
-		$folder = $folder.replace("$rootPath\","")
+		$folder = $folder.replace("$($orgname.toLower())\","")
 		
 		$name = $item.sname.split(".")[0]
 		$guesthostname = if($item.sname -like "*.*"){$item.sname}else{$item.GuestHostName}
@@ -473,9 +476,10 @@ foreach ($item in $data){
 if($VerbosDebug){Write-CULog -Msg "Creating Folder Object, should be quick" -ShowConsole -color Green}
 else{Write-CULog -Msg "Creating Folder Object, should be quick"}
 $foldersToAdd.Add($rootPath.TrimEnd("\"))|out-null
+
 foreach ($path in $folderList){
-	if($path -ne $rootPath -or $path -ne $root){
-		$exploded = ($path.replace($rootPath.toLower(),"")).split("\")
+	if($path -ne $rootPath){
+		$exploded = $path.split("\")
 		for ($i = 0; $i -lt $exploded.count; $i++) {
 			$folderadd = if($i -eq 0){$exploded[$i]}else{$foldersToAdd[-1] + "\$($exploded[$i])".TrimEnd("\")}
 			$foldersToAdd.Add($folderadd)|out-null
@@ -483,10 +487,16 @@ foreach ($path in $folderList){
 	}
 }
 
-$uniqueFolders = ($foldersToAdd|?{$_ -ne $root -and $_ -ne $rootPath})|sort -unique
+(($foldersToAdd|?{$_ -ne $root})|sort -unique)|%{$uniqueFolders.add($_)|out-null}
+
+$remPath = $orgName.tolower()
+foreach ($f in ($syncFolder.split('\'))){
+	$uniqueFolders.Remove($remPath)
+}
+
 foreach ($folder in $uniqueFolders){
 	$folderName = fixPathCase $folder.split("\")[-1]
-	$addFolderTo = fixPathCase $folder.replace("$rootPath\","")
+	$addFolderTo = fixPathCase $folder.replace("$($orgname.toLower())\","")
 	#write-host "Name: $folderName -> $addfolderTo"
 	$Environment.Add([ControlUpObject]::new($FolderName,$addFolderTo,"Folder",$null,$null,$null,$null))
 }
@@ -523,7 +533,7 @@ function Build-CUTree {
         $maxBatchSize = 1000
         $maxFolderBatchSize = 100
         [int]$errorCount = 0
-
+		
         function Execute-PublishCUUpdates {
             Param([Parameter(Mandatory = $True)][Object]$BatchObject,[Parameter(Mandatory = $True)][string]$Message)
             [int]$returnCode = 0
@@ -584,7 +594,7 @@ function Build-CUTree {
         #create a hashtable out of the CUMachines object as it's much faster to query. This is critical when looking up Machines when ControlUp contains ten's of thousands of machines.
         $CUComputersHashTable = @{}
         foreach ($machine in $CUComputers){foreach ($obj in $machine){$CUComputersHashTable.Add($Obj.Name, $obj)}}
-			try {$CUFolders   = Get-CUFolders # add a filter on path so only folders within the rootfolder are used
+			try {$CUFolders = Get-CUFolders # add a filter on path so only folders within the rootfolder are used
 			}catch{
 				$errorMessage = "Unable to get folders from ControlUp: $_"
 				Write-CULog -Msg $errorMessage  -ShowConsole -Type E
@@ -603,7 +613,7 @@ function Build-CUTree {
         ## strip off leading \ as CU cmdlets don't like it
         [string[]]$CURootFolderElements = @(($CURootFolder.Trim('\').Split('\')))
         Write-Verbose -Message "Got $($CURootFolderElements.Count) elements in path `"$CURootFolder`""
-
+		
         ## see if first folder element is the organisation name and if not then we will prepend it as must have that
         if($OrganizationName -ne $CURootFolderElements[0]){$CURootFolder = Join-Path -Path $OrganizationName -ChildPath $CURootFolder}
 
@@ -615,7 +625,8 @@ function Build-CUTree {
         $ExtTreeHashTable = @{}
         $ExtFolderPaths = New-Object -TypeName System.Collections.Generic.List[psobject]
         foreach ($ExtObj in $externalTree){foreach ($obj in $ExtObj){if($obj.Type -eq 'Computer'){$ExtTreeHashTable.Add($Obj.Name, $obj)}else{$ExtFolderPaths.Add($obj)}}}
-
+        #foreach ($ExtObj in $externalTree){foreach ($obj in $ExtObj){if($obj.Type -eq 'Computer'){$ExtTreeHashTable.Add($Obj.Name, $obj)}else{if($obj.folderpath -notlike "*$OrganizationName*\$OrganizationName*"){$ExtFolderPaths.Add($obj)}}}}
+		#$ExtFolderPaths.folderpath|%{write-host $_};pause
         Write-CULog -Msg "Target Folder Paths:"
         Write-CULog "$($ExtFolderPaths.count) paths detected" -ShowConsole -SubMsg
         foreach ($ExtFolderPath in $ExtFolderPaths){Write-CULog -Msg "$($ExtFolderPath.FolderPath)" -SubMsg}
@@ -627,7 +638,7 @@ function Build-CUTree {
         #we'll output the statistics at the end -- also helps with debugging
         $FoldersToAdd          = New-Object System.Collections.Generic.List[PSObject]
         [hashtable]$newFoldersAdded = @{} ## keep track of what we've issued batch commands to create so we don't duplicate
-
+		
         foreach ($ExtFolderPath in $ExtFolderPaths.FolderPath){
             if ($ExtFolderPath -notin $CUFolders.Path){ 
                 [string]$pathSoFar = $null
@@ -843,12 +854,12 @@ function Build-CUTree {
 #delete Logs Older Than 30 days
 Delete-Files -Path "$LogPath" -OlderThanDays $LogDuration -extension "log"
 
-
 #Kicking off Build CUTree 
 if($debug){Write-CULog -Msg "Starting BuildCUTree, this could also take some time" -ShowConsole}
 else{Write-CULog -Msg "Starting BuildCUTree, this could also take some time"}
 
-$BuildCUTreeParams = @{CURootFolder = $syncFolder}
+$BuildCUTreeParams = @{CURootFolder = ""}
+$BuildCUTreeParams = @{CUSyncFolder = "$syncFolder"}
 if ($Preview){$BuildCUTreeParams.Add("Preview",$true)}
 if ($Delete){$BuildCUTreeParams.Add("Delete",$true)}
 if ($LogFile){$BuildCUTreeParams.Add("LogFile",$LogFile)}
