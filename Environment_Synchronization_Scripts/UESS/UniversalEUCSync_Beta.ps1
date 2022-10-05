@@ -334,10 +334,10 @@ foreach ($eucf in $global:eucFList){
 	foreach ($eucName in $eucNames){
 		if ($eucf.name -eq $eucName){
 			$eucFolder.add($eucf.path)|out-null
-			
 		}
 	}
 }
+
 $eucConCheck = $eucFolder
 
 $eucConnectedMachines = (Invoke-CUQuery -Fields "ParentFolderPath", "sName", "GuestHostName" -Take $maxValue -Scheme "Main" -Table "XD_VDA" -Focus "$root\EUC Environments").data
@@ -346,6 +346,7 @@ $eucCPF = $eucConnectedMachines.parentfolderpath|sort -unique
 #if EUC folder is disconnected, do not remove machines
 if($VerbosDebug){Write-CULog -Msg "if EUC folder is disconnected, do not remove machines" -ShowConsole -color Green}
 else{Write-CULog -Msg "if EUC folder is disconnected, do not remove machines"}
+
 foreach ($folder in $eucConnectedMachines){
 	$eucFolder.remove($folder.parentfolderpath)
 	$EUCCon.add($folder.parentfolderpath)|out-null
@@ -353,7 +354,7 @@ foreach ($folder in $eucConnectedMachines){
 $EC = $EUCCon|sort -unique|out-string
 
 foreach ($f in $eucConCheck){
-	if (($EC|?{$_ -like "*$f*"})){$global:eucConnected.Add($f)|out-null}else{$global:eucDisconnectedMsg.Add($f)|out-null}
+	if (($EC|?{$_.toLower() -like "*$($f.toLower())*"})){$global:eucConnected.Add($f)|out-null}else{$global:eucDisconnectedMsg.Add($f)|out-null}
 }
 
 #Remaps every folder to where they will belong, this is from the Map.cfg
@@ -364,7 +365,6 @@ $eucFolder|%{
 	$map = if($global:folderMaps){folderRemap "$rootPath\$($ex[2])".toLower()}else{"$rootPath\$($ex[2])".toLower()}
 	$global:eucDisconnected.Add($map)|out-null
 }
-
 ##Display Connected and Disconnected machines in console/logs
 if($VerbosDebug){Write-CULog -Msg "Connected:" -ShowConsole -Color Cyan}
 else{Write-CULog -Msg "Connected:"}
@@ -593,7 +593,12 @@ function Build-CUTree {
         Write-CULog -Msg  "CU Computers Count: $(if($CUComputers){ $CUComputers.count }else{ 0 })" -ShowConsole -Color Cyan
         #create a hashtable out of the CUMachines object as it's much faster to query. This is critical when looking up Machines when ControlUp contains ten's of thousands of machines.
         $CUComputersHashTable = @{}
-        foreach ($machine in $CUComputers){foreach ($obj in $machine){$CUComputersHashTable.Add($Obj.Name, $obj)}}
+        foreach ($machine in $CUComputers){
+			foreach ($obj in $machine){
+					$CUComputersHashTable.Add($Obj.Name, $obj)
+				}
+		}
+		
 			try {$CUFolders = Get-CUFolders # add a filter on path so only folders within the rootfolder are used
 			}catch{
 				$errorMessage = "Unable to get folders from ControlUp: $_"
@@ -728,18 +733,18 @@ function Build-CUTree {
         #we'll output the statistics at the end -- also helps with debugging
         $FoldersToRemove = New-Object System.Collections.Generic.List[PSObject]
         
+		
         if ($Delete){
             Write-CULog "Determining Objects to be Removed" -ShowConsole
 	        # Build batch for folders which are in ControlUp but not in the external source
-
-            [string]$folderRegex = "^$([regex]::Escape($CURootFolder))\\.+"
+			$cuFolderSyncroot = "$CURootFolder$CUSyncFolder"
+            [string]$folderRegex = "^$([regex]::Escape($cuFolderSyncroot))\\.+"
             [array]$CUFolderSyncRoot = @($CUFolders.Where{ $_.Path -match $folderRegex })
-            if($CUFolderSyncRoot -and $CUFolderSyncRoot.Count){
-                Write-CULog "Root Target Path : $($CUFolderSyncRoot.Count) subfolders detected" -ShowConsole -Verbose
-            }else{
-                Write-CULog "Root Target Path : Only Target Folder Exists" -ShowConsole -Verbose
-            }
+
+            if($CUFolderSyncRoot -and $CUFolderSyncRoot.Count){Write-CULog "Root Target Path : $($CUFolderSyncRoot.Count) subfolders detected" -ShowConsole -Verbose}
+			else{Write-CULog "Root Target Path : Only Target Folder Exists" -ShowConsole -Verbose}
             Write-CULog "Determining Folder Objects to be Removed" -ShowConsole
+
 	        foreach ($CUFolder in $($CUFolderSyncRoot.Path)){
                 $folderRegex = "$([regex]::Escape($CUFolder))"
                 ## need to test if the whole path matches or it's a sub folder (so "Folder 1" won't match "Folder 12")
@@ -747,7 +752,7 @@ function Build-CUTree {
                 ## can't use a simple -notin as path may be missing but there may be child paths of it - GRL
     	        ##if (($CUFolder -notin $ExtFolderPaths.FolderPath) -and ($CUFolder -ne $("$CURootFolder"))){ #prevents excluding the root folder
 						$skip = $false
-						foreach ($path in $global:eucDisconnected){if ($CUFolder -like "$path*"){$skip = $true;break}}
+						foreach ($path in $global:eucDisconnectedMsg){if ($CUFolder -like "$path*"){$skip = $true;break}}
 						if ($Delete -and $CUFolder -and !$Skip){
 							if ($FoldersToRemoveCount -ge $maxFolderBatchSize){  ## we will execute computer batch operations $maxBatchSize at a time
 								Write-Verbose "Generating a new remove folder batch"
@@ -766,16 +771,17 @@ function Build-CUTree {
             Write-CULog "Determining Computer Objects to be Removed" -ShowConsole
 	        # Build batch for computers which are in ControlUp but not in the external source
             [string]$curootFolderAllLower = $CURootFolder.ToLower()
-
-	        foreach ($CUComputer in $CUComputers.Where{$_.path -like "$CURootFolder*"}){
+				
+	        foreach ($CUComputer in $CUComputers.Where{$_.path.toLower() -like "$CURootFolder$CUSyncFolder*".toLower()}){
     	            if (!($ExtTreeHashTable[$CUComputer.name].name)){
 						$CUComputerPath = $cucomputer.path
 						$skip = $false
-						foreach ($path in $global:eucDisconnected){if ($CUComputerPath -like "$path*"){$skip = $true;break}}
-						
-						if (($CUComputersHashTable.Contains("$($CUComputer.name)"))){$skip = $true}
-						
-                        if ($Delete -and !$skip){
+						foreach ($path in $global:eucDisconnectedMsg){
+							if ($CUComputerPath -like "$path*"){$skip = $true;break}
+						}
+						if (($ExtComputers.Contains("$($CUComputer.name)"))){$skip = $true}
+
+                        if ($Delete -and !$skip){							
                             if ($FoldersToRemoveCount -ge $maxFolderBatchSize){
                                 Write-Verbose "Generating a new remove computer batch"
                                 $ComputersRemoveBatches.Add($ComputersRemoveBatch)
@@ -790,6 +796,8 @@ function Build-CUTree {
     	        ##}
 	        }
         }
+		
+		
         if ($FoldersToRemoveCount -le $maxFolderBatchSize -and $FoldersToRemoveCount -ne 0){ $FoldersToRemoveBatches.Add($FoldersToRemoveBatch)   }
         if ($ComputersRemoveCount -le $maxBatchSize -and $ComputersRemoveCount -ne 0)       { $ComputersRemoveBatches.Add($ComputersRemoveBatch)   }
 
@@ -864,4 +872,3 @@ if ($Preview){$BuildCUTreeParams.Add("Preview",$true)}
 if ($Delete){$BuildCUTreeParams.Add("Delete",$true)}
 if ($LogFile){$BuildCUTreeParams.Add("LogFile",$LogFile)}
 [int]$errorCount = Build-CUTree -ExternalTree $Environment @BuildCUTreeParams
-
