@@ -166,7 +166,7 @@ if(!$global:isAdmin){Write-CULog -Msg "User is not Local Admin, this may cause s
 [Int32]$LogDuration = $LogDuration
 [bool]$Preview = if($Preview.ToLower()[0] -eq "y"){$false}else{$true}
 [bool]$VerbosDebug = if($VerbosDebug.ToLower()[0] -eq "y"){$true}else{$false}
-[bool]$save = if($saveConfig.ToLower()[0] -eq "y"){$true}else{$false}
+[bool]$save = if($saveConfig.ToLower()[0] -eq "y" -or $saveConfig.ToLower()[0] -eq "r"){$true}else{$false}
 
 $exportPath = "$($env:programdata)\ControlUp\SyncScripts"
 
