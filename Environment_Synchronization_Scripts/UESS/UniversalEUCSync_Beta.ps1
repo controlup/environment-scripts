@@ -75,10 +75,28 @@ param([string]$string,[string] $this,[string] $that)
 function folderRemap{
 #Remaps the path to the new path based on filters
 	$path = $args[0]
+	$name = $args[1]
 	foreach ($map in $global:folderMaps){
-		$map = $map.split(',')
-		$path = (icReplace -string $path -this $map[0] -that $map[1]).replace('\\','\')
+		if($map.contains("*")){
+			$map = $map.split(',')
+			$find = $map[0].replace('*',$null)
+			$pathPlusName = "$path\$name"
+				if ($pathPlusName -like "*$find*"){
+					if ($map[1] -like "$($global:SyncRoot)\EUC Environments*"){
+						$path = $map[1]
+					}else{
+						$path = "$($global:SyncRoot)\EUC Environments\$($map[1])"
+					}
+				}
+		}else{
+			if(!$map.contains("*")){
+				$map = $map.split(',')
+				$path = (icReplace -string $path -this $map[0] -that $map[1]).replace('\\','\')
+			}
+		}
 	}
+
+
 	return $path
 }
 
@@ -166,7 +184,7 @@ if(!$global:isAdmin){Write-CULog -Msg "User is not Local Admin, this may cause s
 [Int32]$LogDuration = $LogDuration
 [bool]$Preview = if($Preview.ToLower()[0] -eq "y"){$false}else{$true}
 [bool]$VerbosDebug = if($VerbosDebug.ToLower()[0] -eq "y"){$true}else{$false}
-[bool]$save = if($saveConfig.ToLower()[0] -eq "y" -or $saveConfig.ToLower()[0] -eq "r"){$true}else{$false}
+[bool]$save = if($saveConfig.ToLower()[0] -eq "y"){$true}else{$false}
 
 $exportPath = "$($env:programdata)\ControlUp\SyncScripts"
 
@@ -227,7 +245,7 @@ if($configImport -and !$save){
 	[bool]$addBrokers = $configImport.AddBrokers
 	$DomainOverride = if($configImport.DomainOverride){$configImport.DomainOverride}
 }
-
+$global:SyncRoot = "$orgName".toLower()
 #Setup LogPaths
 $logTime = (get-date).toString("MMddyyyyHHmm")
 $LogPath = $LogPath.TrimEnd("\")
@@ -306,18 +324,17 @@ else{Write-CULog -Msg "Put all query machines into an object for easy processing
 foreach ($q in $iq){
 	foreach ($item in $q){
 		if($item.ParentFolderPath){
-			$path = folderRemap $item.ParentFolderPath
+			$path = folderRemap $item.ParentFolderPath $item.sname
 			$global:OriginalPaths.add($item.sname ,$item.ParentFolderPath)
 		}
 		if($item.xdBrokerFolderPath){
-			$path = folderRemap $item.xdBrokerFolderPath
+			$path = folderRemap $item.xdBrokerFolderPath $item.sname
 			$global:OriginalPaths.add($item.sname ,$item.xdBrokerFolderPath)
 		}
 
 		$query.Add([machines]::new($path,$item.sname,$item.GuestHostName))|out-null
 	}
 }
-
 #####################################################
 #############connected/disconnected down############
 #####################################################
@@ -437,7 +454,8 @@ else{Write-CULog -Msg "Creating Machines Object, be patient this could take some
 foreach ($item in $data){
 	#Get FQDN for machine
 		$dnsName = $null
-		if ($item.ParentFolderPath){$folderPath = ($item.ParentFolderPath).replace("euc environments",$syncFolder)}
+		if ($item.ParentFolderPath){$folderPath = icReplace -string $item.ParentFolderPath -this "euc environments" -that $syncFolder}
+
 		$folderList.Add($folderPath.TrimEnd("\"))|out-null
 		$folder = $folderPath.TrimEnd("\")
 		$m = $item.sname.TrimEnd("\")
@@ -740,7 +758,7 @@ function Build-CUTree {
 			$cuFolderSyncroot = "$CURootFolder$CUSyncFolder"
             [string]$folderRegex = "^$([regex]::Escape($cuFolderSyncroot))\\.+"
             [array]$CUFolderSyncRoot = @($CUFolders.Where{ $_.Path -match $folderRegex })
-
+			
             if($CUFolderSyncRoot -and $CUFolderSyncRoot.Count){Write-CULog "Root Target Path : $($CUFolderSyncRoot.Count) subfolders detected" -ShowConsole -Verbose}
 			else{Write-CULog "Root Target Path : Only Target Folder Exists" -ShowConsole -Verbose}
             Write-CULog "Determining Folder Objects to be Removed" -ShowConsole
@@ -771,8 +789,9 @@ function Build-CUTree {
             Write-CULog "Determining Computer Objects to be Removed" -ShowConsole
 	        # Build batch for computers which are in ControlUp but not in the external source
             [string]$curootFolderAllLower = $CURootFolder.ToLower()
-				
+			
 	        foreach ($CUComputer in $CUComputers.Where{$_.path.toLower() -like "$CURootFolder$CUSyncFolder*".toLower()}){
+				
     	            if (!($ExtTreeHashTable[$CUComputer.name].name)){
 						$CUComputerPath = $cucomputer.path
 						$skip = $false
@@ -844,8 +863,9 @@ function Build-CUTree {
         Write-CULog -Msg "Build-CUTree took: $($(New-TimeSpan -Start $startTime -End $endTime).Seconds) Seconds." -ShowConsole -Color White
         Write-CULog -Msg "Committing Changes:" -ShowConsole -Color DarkYellow
 		if ($FolderAddBatches.Count -gt 0 -and $batchCreateFolders){ $errorCount += Execute-PublishCUUpdates -BatchObject $FolderAddBatches -Message "Executing Folder Object Adds"}
+		#write-host "Waiting 30 seconds for folder creation";start-sleep 30
 		if ($ComputersAddBatches.Count -gt 0){ $errorCount += Execute-PublishCUUpdates -BatchObject $ComputersAddBatches -Message "Executing Computer Object Adds"}
-		if ($ComputersMoveBatches.Count -gt 0){ $errorCount += Execute-PublishCUUpdates -BatchObject $ComputersMoveBatches -Message "Executing Computer Object Moves"}
+		if ($ComputersMoveBatches.Count -gt 0){$errorCount += Execute-PublishCUUpdates -BatchObject $ComputersMoveBatches -Message "Executing Computer Object Moves"}
         if ($ComputersRemoveBatches.Count -gt 0){ $errorCount += Execute-PublishCUUpdates -BatchObject $ComputersRemoveBatches -Message "Executing Computer Object Removal"}
 		if ($FoldersToRemoveBatches.Count -gt 0){ $errorCount += Execute-PublishCUUpdates -BatchObject $FoldersToRemoveBatches -Message "Executing Folder Object Removal"}
         Write-CULog -Msg "Returning $errorCount to caller"
