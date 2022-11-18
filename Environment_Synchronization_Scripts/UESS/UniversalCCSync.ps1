@@ -4,6 +4,8 @@ Param(
 	[Parameter(Mandatory=$false)][string]$DomainDNS,
 	[Parameter(Mandatory=$false)][string]$Exclude,
 	[Parameter(Mandatory=$false)][string]$Delete,
+    [Parameter(Mandatory=$false)][string]$LogPath,
+	[Parameter(Mandatory=$false)][string]$LogDuration,
 	[Parameter(Mandatory=$false)][string]$Preview,
 	[Parameter(Mandatory=$false)][string]$VerbosDebug,
 	[Parameter(Mandatory=$false)][string]$GetHelp,
@@ -42,68 +44,61 @@ Param(
 }
 
 function Write-CUEventLog {
-Param(
-	[Parameter(Mandatory=$true)][string]$eventID,
-	[Parameter(Mandatory=$true)][string]$EntryType,
-	[Parameter(Mandatory=$true)][string]$Message
-)
-	$source = "ControlUpMonitor"
-	$LogName = "Application"
-
-	try {
-		Write-EventLog -LogName $LogName -Source $source -EventID $eventID -EntryType $EntryType -Message $Message -ErrorAction "Stop"
-	}catch{
-		if($_ -like "*The source name*does not exist on computer*"){
-			New-EventLog -LogName $LogName -Source $source
-			Write-EventLog -LogName $LogName -Source $source -EventID $eventID -EntryType $EntryType -Message $Message
-		}
-	}
+	Param(
+		[Parameter(Mandatory=$true)][string]$eventID,
+		[Parameter(Mandatory=$true)][string]$EntryType,
+		[Parameter(Mandatory=$true)][string]$Message
+	)
+		$source = "ControlUpMonitor"
+		$LogName = "Application"
+	
+		Write-EventLog -LogName $LogName -Source $source -EventID $eventID -EntryType $EntryType -Message "UESS: $Message"
+	
 }
 
 function Delete-Files {
-Param(
-	[Parameter(Mandatory=$false)][string]$Path,
-	[Parameter(Mandatory=$false)][int32]$OlderThanDays,
-	[Parameter(Mandatory=$false)][string]$extension
-)
-
-if($path[-1] -ne '\'){$path = "$path\"}
-Get-Item "$path*$extension"|?{$_.lastwritetime -le (get-date).addDays(-($OlderThanDays))}|remove-item -force
+    Param(
+        [Parameter(Mandatory=$false)][string]$Path,
+        [Parameter(Mandatory=$false)][int32]$OlderThanDays,
+        [Parameter(Mandatory=$false)][string]$extension
+    )
+    
+    if($path[-1] -ne '\'){$path = "$path\"}
+    Get-Item "$path*$extension"|?{$_.lastwritetime -le (get-date).addDays(-($OlderThanDays))}|remove-item -force -erroraction 'silentlycontinue'
 }
+
 function icReplace {
 param([string]$string,[string] $this,[string] $that)
 	return ([Regex]::Replace($string, [regex]::Escape($this),  $that.trim(), [System.Text.RegularExpressions.RegexOptions]::IgnoreCase))
 }
 
-<#
 function folderRemap{
-#Remaps the path to the new path based on filters
-	$path = $args[0]
-	$name = $args[1]
-	foreach ($map in $global:folderMaps){
-		if($map[1]){
-			$map = $map.split(',')
-			$path = $path.replace($map[0].toLower(),$map[1].trim()).replace('\\','\')
+	#Remaps the path to the new path based on filters
+		$path = $args[0]
+		$name = $args[1]
+		foreach ($map in $global:folderMaps){
+			if($map.contains("*")){
+				$map = $map.split(',')
+				$find = $map[0].replace('*',$null)
+				$pathPlusName = "$path\$name"
+					if ($pathPlusName -like "*$find*"){
+						if ($map[1] -like "$($global:SyncRoot)\Cloud Connections*"){
+							$path = $map[1]
+						}else{
+							$path = "$($global:SyncRoot)\Cloud Connections\$($map[1])"
+						}
+					}
+			}else{
+				if(!$map.contains("*")){
+					$map = $map.split(',')
+					$path = (icReplace -string $path -this $map[0] -that $map[1]).replace('\\','\')
+				}
+			}
 		}
-		if($name -like "*$($map[0])*" -and $map[2]){
-			$path = "$path\$($map[2])"
-		}
-	}
 	
-	return $path
-}
-#>
-
-function folderRemap{
-#Remaps the path to the new path based on filters
-	$path = $args[0]
-	foreach ($map in $global:folderMaps){
-		$map = $map.split(',')
-		$path = (icReplace -string $path -this $map[0] -that $map[1]).replace('\\','\')
+	
+		return $path
 	}
-	return $path
-}
-
 
 function dnsMap{
 #Maps DNS Based on the DNS Mapping file, if needed.
@@ -111,7 +106,6 @@ Param(
 	[Parameter(Mandatory=$false)][string]$guestHostName,
 	[Parameter(Mandatory=$false)][string]$Folder
 )
-
 	if($global:DnsMaps){
 	#Mapping File Exists and loop through to find matches
 		foreach ($map in $global:DnsMaps){
@@ -172,9 +166,11 @@ function fixPathCase{
 $tsStart = get-date
 #PS Module Import and test Module is running correctly
 try {
-	Get-Item "$((get-childitem 'C:\Program Files\Smart-X\ControlUpMonitor\' -Directory)[-1].fullName)\*powershell*.dll"|import-module
+	$monPath = ((Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\cuMonitor").imagepath).replace("\cuMonitor.exe",$null).replace('"',$null)
+	Get-Item "$monPath\*powershell*.dll"|import-module
 	$global:cuSites = get-cusites
 }catch{if($_){throw $_}}
+
 
 if(!$global:isAdmin){Write-CULog -Msg "User is not Local Admin, this may cause some errors with writing to event log and saving to %ProgramData%" -ShowConsole -Type W}
 
@@ -183,14 +179,17 @@ $exportPath = "$($env:programdata)\ControlUp\SyncScripts"
 $LogFile = "$exportPath\Logs\$($global:SSPrefix)$logTime.log"
 New-Item -ItemType Directory -Force -Path "$exportPath\Logs" |out-null
 
+[String]$orgName = (Get-CUFolders|?{$_.FolderType -eq "RootFolder"}).name
 [String]$syncFolder = $FolderPath
 [String]$domain = $DomainDNS
 [String]$Exclude = if($Exclude.toLower() -ne "no"){$Exclude}else{$null}
 [Array]$ExcludedWords = if($Exclude){$Exclude.split(",")}else{$null}
 [bool]$Delete = if($Delete.toLower()[0] -eq "y"){$true}else{$false}
+[String]$LogPath = $LogPath
+[Int32]$LogDuration = $LogDuration
 [bool]$Preview = if($Preview.ToLower()[0] -eq "y"){$false}else{$true}
 [bool]$VerbosDebug = if($VerbosDebug.ToLower()[0] -eq "y"){$true}else{$false}
-[bool]$save = if($saveConfig.ToLower()[0] -eq "y"){$true}else{$false}
+[bool]$save = if($saveConfig.ToLower()[0] -eq "y" -or $saveConfig.ToLower()[0] -eq "s"){$true}else{$false}
 
 
 if($save){
@@ -199,6 +198,8 @@ if($save){
 		SyncFolder = $syncFolder; 
 		domainDNS = $domain
 		Excludes = $Exclude;
+        LogPath = $LogPath;
+		LogDuration = $LogDuration;
 		delete = $delete;
 		Preview = $preview;
 		VerbosDebug = $VerbosDebug;
@@ -239,12 +240,20 @@ if($configImport -and !$save){
 	$syncFolder = $configImport.SyncFolder
 	$domainDNS = $configImport.domainDNS
 	[Array]$excludedWords = if($configImport.Excludes.count){$configImport.Excludes.split(",")}
+    [String]$LogPath = $configImport.LogPath
+	[Int32]$LogDuration = $configImport.LogDuration
 	[bool]$delete = $configImport.delete
 	[bool]$preview = $configImport.Preview
 	[bool]$VerbosDebug = $configImport.VerbosDebug
 	$DomainOverride = if($configImport.DomainOverride){$configImport.DomainOverride}
 }
-#$VerbosDebug = $true
+$global:SyncRoot = "$orgName".toLower()
+#Setup LogPaths
+$logTime = (get-date).toString("MMddyyyyHHmm")
+$LogPath = $LogPath.TrimEnd("\")
+$LogFile = "$LogPath\$logTime.log"
+New-Item -ItemType Directory -Force -Path "$LogPath" |out-null
+
 $query = New-Object -TypeName System.Collections.Generic.List[PSObject]
 class machines{
     [string]$FolderPath
@@ -271,9 +280,12 @@ $global:OriginalPaths = @{}
 $global:BadDomains = [System.Collections.ArrayList]@()
 $global:GoodDomains = [System.Collections.ArrayList]@()
 $global:CCDisconnected = [System.Collections.ArrayList]@()
+$global:CCDisconnectedMsg = [System.Collections.ArrayList]@()
+$global:CCConnected = [System.Collections.ArrayList]@()
+$global:CCFList = [System.Collections.ArrayList]@()
 
 ##Non-Globals
-$root = (Get-CUFolders)[0].name.toLower()
+$root = $orgName
 $rootPath = if(($syncFolder.toLower()) -like "$($root.toLower())*"){$syncFolder}else{"$root\$syncFolder"}
 
 ##array List
@@ -287,9 +299,10 @@ $noAdd = [System.Collections.ArrayList]@()
 $CCFolder = [System.Collections.ArrayList]@()
 $CCConnected = [System.Collections.ArrayList]@()
 $foldersToUnique = [System.Collections.ArrayList]@()
-
-
+$uniqueFolders = [System.Collections.ArrayList]@()
 $CCCon = [System.Collections.ArrayList]@()
+$CCNames = [System.Collections.ArrayList]@()
+$CCConnectedMachines = [System.Collections.ArrayList]@()
 
 $maxValue = [int32]::MaxValue
 
@@ -321,26 +334,45 @@ foreach ($q in $iq){
 	}
 }
 
+#####################################################
+#############connected/disconnected down############
+#####################################################
 
 #Determine if an CC connection exists but is disconnected
 if($VerbosDebug){Write-CULog -Msg "Determine if an CC connection exists but is disconnected" -ShowConsole -color Green}
 else{Write-CULog -Msg "Determine if an CC connection exists but is disconnected"}
-(Invoke-CUQuery -Fields "*" -Take $maxValue -Scheme "Main" -Table "Folders" -Focus "$root\Cloud Connections").data.path|%{if(([string]$_).toString().split('\').count -eq 3){$CCFolder.add($_)|out-null}}
 
-$CCConnected = $foldersToUnique|sort -unique
+
+(Invoke-CUQuery -Scheme "Cluster" -table "PartitionToRecord" -Fields "Name","ItemType" -where "ItemType=10 OR ItemType=8" -take $MaxValue).data.Name|%{$CCNames.add($_)|out-null}
+(Invoke-CUQuery -Fields "Name","Path" -Scheme "Main" -Table "Folders" -Focus "$root\Cloud Connections").data|%{$global:CCFList.add($_)|out-null}
+
+foreach ($CCf in $global:CCFList){
+	foreach ($CCName in $CCNames){
+		if ($CCf.name -eq $CCName){
+			$CCFolder.add($CCf.path)|out-null
+		}
+	}
+}
+
+$CCConCheck = $CCFolder
+
+(Invoke-CUQuery -Fields "FolderPath", "sName", "GuestHostName" -Take $maxValue -Scheme "Main" -Table "AzureComputer" -Focus "$root\Cloud Connections").data|%{$CCConnectedMachines.add($_)|out-null}
+(Invoke-CUQuery -Fields "FolderPath", "sName", "GuestHostName" -Take $maxValue -Scheme "Main" -Table "AwsComputer" -Focus "$root\Cloud Connections").data|%{$CCConnectedMachines.add($_)|out-null}
+$CCCPF = $CCConnectedMachines.FolderPath|sort -unique
 
 #if CC folder is disconnected, do not remove machines
 if($VerbosDebug){Write-CULog -Msg "if CC folder is disconnected, do not remove machines" -ShowConsole -color Green}
 else{Write-CULog -Msg "if CC folder is disconnected, do not remove machines"}
-foreach ($folder in $CCConnected){
-	$s = $folder.split("\")
-	$CCFolder.remove("$($s[0])\$($s[1])\$($s[2])")
-	$CCCon.add("$($s[0])\$($s[1])\$($s[2])")|out-null
-}
-$Connected = $CCCon|sort -unique|out-string
 
-if($VerbosDebug){Write-CULog -Msg "Connected:`n $($Connected)" -ShowConsole -Color Cyan}
-else{Write-CULog -Msg "Connected:`n $($Connected)"}
+foreach ($folder in $CCCPF ){
+	$CCFolder.remove($folder)
+	$CCCon.add($folder)|out-null
+}
+$EC = $CCCon|sort -unique|out-string
+
+foreach ($f in $CCConCheck){
+	if (($EC|?{$_.toLower() -like "*$($f.toLower())*"})){$global:CCConnected.Add($f)|out-null}else{$global:CCDisconnectedMsg.Add($f)|out-null}
+}
 
 #Remaps every folder to where they will belong, this is from the Map.cfg
 if($VerbosDebug){Write-CULog -Msg "Remaps every folder to where they will belong, this is from the Map.cfg" -ShowConsole -color Green}
@@ -350,8 +382,23 @@ $CCFolder|%{
 	$map = if($global:folderMaps){folderRemap "$rootPath\$($ex[2])".toLower()}else{"$rootPath\$($ex[2])".toLower()}
 	$global:CCDisconnected.Add($map)|out-null
 }
-if($VerbosDebug){Write-CULog -Msg "Disconnected:`n $($global:CCDisconnected)" -ShowConsole -Type W}
-else{Write-CULog -Msg "Disconnected:`n $($global:CCDisconnected)" -Type W}
+##Display Connected and Disconnected machines in console/logs
+if($VerbosDebug){Write-CULog -Msg "Connected:" -ShowConsole -Color Cyan}
+else{Write-CULog -Msg "Connected:"}
+$global:CCConnected|%{
+	if($VerbosDebug){Write-CULog -Msg "$_" -ShowConsole -SubMsg -Color Cyan}
+	else{Write-CULog -Msg "$_" -SubMsg}
+}
+if($VerbosDebug){Write-CULog -Msg "Disconnected:" -ShowConsole -Type W}
+else{Write-CULog -Msg "Disconnected:" -Type W}
+$global:CCDisconnectedMsg|%{
+	if($VerbosDebug){Write-CULog -Msg "$_" -ShowConsole -SubMsg -Type W}
+	else{Write-CULog -Msg "$_" -SubMsg -Type W}
+}
+
+#####################################################
+#############connected/disconnected above############
+#####################################################
 
 #Exclude Folders/Machines/Prefixes/Whatever
 if($VerbosDebug){Write-CULog -Msg "Exclude Folders/Machines/Prefixes" -ShowConsole -color Green}
@@ -362,7 +409,7 @@ if($excludedWords){
 		foreach ($exclusion in $excludedWords){
 			#write-host $item.ParentFolderPath.toLower() 
 			$exclusion = $exclusion.trim()
-			if($item.FolderPath.toLower() -like "*$($exclusion.toLower())*"){$noAdd.Add($item.FolderPath)|out-null}
+			if($item.ParentFolderPath.toLower() -like "*$($exclusion.toLower())*"){$noAdd.Add($item.ParentFolderPath)|out-null}
 			if($item.sName.toLower() -like "*$($exclusion.toLower())*"){$noAdd.Add($item.sName)|out-null}
 			
 		}
@@ -408,14 +455,16 @@ else{Write-CULog -Msg "Creating Machines Object, be patient this could take some
 foreach ($item in $data){
 	#Get FQDN for machine
 		$dnsName = $null
-		if ($item.FolderPath){$folderPath = ($item.FolderPath).replace("cloud connections",$syncFolder)}
+
+		if ($item.FolderPath){$folderPath = icReplace -string $item.FolderPath -this "cloud connections" -that $syncFolder}
+		
 		$folderList.Add($folderPath.TrimEnd("\"))|out-null
 		$folder = $folderPath.TrimEnd("\")
 		$m = $item.sname.TrimEnd("\")
 		$ogPath = $global:OriginalPaths.$m
 		$site = siteMap "$ogPath\$($item.sname)"
-		$folder = $folder.replace("$rootPath\","")
-		
+		$folder = $folder.replace("$($orgname.toLower())\","")
+
 		$name = $item.sname.split(".")[0]
 		$guesthostname = if($item.sname -like "*.*"){$item.sname}else{$item.GuestHostName}
 
@@ -442,13 +491,15 @@ foreach ($item in $data){
 		$Environment.Add(([ControlUpObject]::new($name, $folder ,"Computer", $Domain ,"Added by Sync Script",$dnsName,$site)))
 	}
 }
+
 #Creating Folder ControlUp Object to be shipped to buildcutree
 if($VerbosDebug){Write-CULog -Msg "Creating Folder Object, should be quick" -ShowConsole -color Green}
 else{Write-CULog -Msg "Creating Folder Object, should be quick"}
 $foldersToAdd.Add($rootPath.TrimEnd("\"))|out-null
+
 foreach ($path in $folderList){
-	if($path -ne $rootPath -or $path -ne $root){
-		$exploded = ($path.replace($rootPath.toLower(),"")).split("\")
+	if($path -ne $rootPath){
+		$exploded = $path.split("\")
 		for ($i = 0; $i -lt $exploded.count; $i++) {
 			$folderadd = if($i -eq 0){$exploded[$i]}else{$foldersToAdd[-1] + "\$($exploded[$i])".TrimEnd("\")}
 			$foldersToAdd.Add($folderadd)|out-null
@@ -456,10 +507,16 @@ foreach ($path in $folderList){
 	}
 }
 
-$uniqueFolders = ($foldersToAdd|?{$_ -ne $root -and $_ -ne $rootPath})|sort -unique
+(($foldersToAdd|?{$_ -ne $root})|sort -unique)|%{$uniqueFolders.add($_)|out-null}
+
+$remPath = $orgName.tolower()
+foreach ($f in ($syncFolder.split('\'))){
+	$uniqueFolders.Remove($remPath)
+}
+
 foreach ($folder in $uniqueFolders){
 	$folderName = fixPathCase $folder.split("\")[-1]
-	$addFolderTo = fixPathCase $folder.replace("$rootPath\","")
+	$addFolderTo = fixPathCase $folder.replace("$($orgname.toLower())\","")
 	#write-host "Name: $folderName -> $addfolderTo"
 	$Environment.Add([ControlUpObject]::new($FolderName,$addFolderTo,"Folder",$null,$null,$null,$null))
 }
@@ -489,45 +546,27 @@ function Build-CUTree {
 	    [string] $LogFile,
         [Parameter(Mandatory=$false, HelpMessage='ControlUp Site name to assign the machine object to')]
 	    [string] $SiteName,
-        [Parameter(Mandatory=$false, HelpMessage='Debug CU Machine Environment Objects')]
-	    [Object] $DebugCUMachineEnvironment,
-        [Parameter(Mandatory=$false, HelpMessage='Debug CU Folder Environment Object')]
-	    [switch] $DebugCUFolderEnvironment ,
         [Parameter(Mandatory=$false, HelpMessage='Create folders in batches rather than individually')]
-	    [switch] $batchCreateFolders ,
-        [Parameter(Mandatory=$false, HelpMessage='Number of folders to be created that generates warning and requires -force')]
-        [int] $batchCountWarning = 500,
-        [Parameter(Mandatory=$false, HelpMessage='Force creation of folders if -batchCountWarning size exceeded')]
-        [switch] $force ,
-        [Parameter(Mandatory=$false, HelpMessage='Delay between each folder creation when count exceeds -batchCountWarning')]
-        [double] $folderCreateDelaySeconds = 0
-   )
-		$force = $true
-        #This variable sets the maximum computer batch size to apply the changes in ControlUp. It is not recommended making it bigger than 1000
+	    [switch] $batchCreateFolders 
+	)	
+		$batchCreateFolders = $true
         $maxBatchSize = 1000
-        #This variable sets the maximum batch size to apply the changes in ControlUp. It is not recommended making it bigger than 100
         $maxFolderBatchSize = 100
         [int]$errorCount = 0
-        [array]$stack = @(Get-PSCallStack)
-        [string]$callingScript = $stack.Where({ $_.ScriptName -ne $stack[0].ScriptName }) | Select-Object -First 1 -ExpandProperty ScriptName
-        if(!$callingScript -and !($callingScript = $stack | Select-Object -First 1 -ExpandProperty ScriptName)){$callingScript = $stack[-1].Position}
-
+		
         function Execute-PublishCUUpdates {
-            Param(
-	            [Parameter(Mandatory = $True)][Object]$BatchObject,
-	            [Parameter(Mandatory = $True)][string]$Message
-           )
+            Param([Parameter(Mandatory = $True)][Object]$BatchObject,[Parameter(Mandatory = $True)][string]$Message)
             [int]$returnCode = 0
             [int]$batchCount = 0
             foreach ($batch in $BatchObject){
                 $batchCount++
                 Write-CULog -Msg "$Message. Batch $batchCount/$($BatchObject.count)" -ShowConsole -Color DarkYellow -SubMsg
-                if (-not($preview)){
+                if (!($preview)){
                     [datetime]$timeBefore = [datetime]::Now
                     $result = Publish-CUUpdates -Batch $batch 
                     [datetime]$timeAfter = [datetime]::Now
                     [array]$results = @(Show-CUBatchResult -Batch $batch)
-                    [array]$failures = @($results.Where({$_.IsSuccess -eq $false})) ## -and $_.ErrorDescription -notmatch 'Folder with the same name already exists' }))
+                    [array]$failures = @($results.Where({$_.IsSuccess -eq $false}))
 
                     Write-CULog -Msg "Execution Time: $(($timeAfter - $timeBefore).TotalSeconds) seconds" -ShowConsole -Color Green -SubMsg
                     Write-CULog -Msg "Result: $result" -ShowConsole -Color Green -SubMsg
@@ -546,13 +585,13 @@ function Build-CUTree {
         if ($PSBoundParameters.ContainsKey("LogFile")){
             $Global:LogFile = $PSBoundParameters.LogFile
             Write-Host "Saving Output to: $Global:LogFile"
-            if (-not(Test-Path $($PSBoundParameters.LogFile))){
+            if (!(Test-Path $($PSBoundParameters.LogFile))){
                 Write-CULog -Msg "Creating Log File" #Attempt to create the file
-                if (-not(Test-Path $($PSBoundParameters.LogFile))){Write-Error "Unable to create the report file" -ErrorAction Stop}
+                if (!(Test-Path $($PSBoundParameters.LogFile))){Write-Error "Unable to create the report file" -ErrorAction Stop}
             }else{Write-CULog -Msg "Beginning Synchronization"}
             Write-CULog -Msg "Detected the following parameters:"
             foreach($psbp in $PSBoundParameters.GetEnumerator()){
-                if ($psbp.Key -like "ExternalTree" -or $psbp.Key -like "DebugCUMachineEnvironment"){
+                if ($psbp.Key -like "ExternalTree"){
                     Write-CULog -Msg $("Parameter={0} Value={1}" -f $psbp.Key,$psbp.Value.count)
                 }else{Write-CULog -Msg $("Parameter={0} Value={1}" -f $psbp.Key,$psbp.Value)}
             }
@@ -562,95 +601,32 @@ function Build-CUTree {
         $startTime = Get-Date
         [string]$errorMessage = $null
 
-        #region Load ControlUp PS Module
-        try{
-            ## Check CU monitor is installed and at least minimum required version
-            [string]$cuMonitor = 'ControlUp Monitor'
-            [string]$cuDll = 'ControlUp.PowerShell.User.dll'
-            [string]$cuMonitorProcessName = 'CUmonitor'
-            [version]$minimumCUmonitorVersion = '8.1.5.600'
-            if(!($installKey = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -Name DisplayName -ErrorAction SilentlyContinue| Where-Object DisplayName -eq $cuMonitor)){
-                Write-CULog -ShowConsole -Type W -Msg "$cuMonitor does not appear to be installed"
-            }
-            ## when running via scheduled task we do not have sufficient rights to query services
-            if(!($cuMonitorProcess = Get-Process -Name $cuMonitorProcessName -ErrorAction SilentlyContinue)){
-                Write-CULog -ShowConsole -Type W -Msg "Unable to find process $cuMonitorProcessName for $cuMonitor service" ## pid $($cuMonitorService.ProcessId)"
-            }else{
-                [string]$message =  "$cuMonitor service running as pid $($cuMonitorProcess.Id)"
-                ## if not running as admin/elevated then won't be able to get start time
-                if($cuMonitorProcess.StartTime){
-                    $message += ", started at $(Get-Date -Date $cuMonitorProcess.StartTime -Format G)"
-                }
-                Write-CULog -Msg $message
-            }
-
-	        # Importing the latest ControlUp PowerShell Module - need to find path for dll which will be where cumonitor is running from. Don't use Get-Process as may not be elevated so would fail to get path to exe and win32_service fails as scheduled task with access denied
-            if(!($cuMonitorServicePath = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\cuMonitor' -Name ImagePath -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ImagePath))){
-                Throw "$cuMonitor service path not found in registry"
-            }elseif(!($cuMonitorProperties = Get-ItemProperty -Path $cuMonitorServicePath.Trim('"') -ErrorAction SilentlyContinue)){
-                Throw  "Unable to find CUmonitor service at $cuMonitorServicePath"
-            }elseif($cuMonitorProperties.VersionInfo.FileVersion -lt $minimumCUmonitorVersion){
-                Throw "Found version $($cuMonitorProperties.VersionInfo.FileVersion) of cuMonitor.exe but need at least $($minimumCUmonitorVersion.ToString())"
-            }elseif(!($pathtomodule = Join-Path -Path (Split-Path -Path $cuMonitorServicePath.Trim('"') -Parent) -ChildPath $cuDll)){
-                Throw "Unable to find $cuDll in `"$pathtomodule`""
-            }elseif(!(Import-Module $pathtomodule -PassThru)){
-                Throw "Failed to import module from `"$pathtomodule`""
-            }elseif(!(Get-Command -Name 'Get-CUFolders' -ErrorAction SilentlyContinue)){
-                Throw "Loaded CU Monitor PowerShell module from `"$pathtomodule`" but unable to find cmdlet Get-CUFolders"
-            }
-        }catch{
-            $exception = $_
-            Write-CULog -Msg $exception -ShowConsole -Type E
-            ##Write-CULog -Msg (Get-PSCallStack|Format-Table)
-            Write-CULog -Msg 'The required ControlUp PowerShell module was not found or could not be loaded. Please make sure this is a ControlUp Monitor machine.' -ShowConsole -Type E
-            $errorCount++
-            break
-        }
-        #endregion
-
-
         #region Retrieve ControlUp folder structure
-        if (-not($DebugCUMachineEnvironment)){
-            try {
-                $CUComputers = Get-CUComputers # add a filter on path so only computers within the $rootfolder are used
-            }catch{
+            try {$CUComputers = Get-CUComputers}
+			catch{
                 $errorMessage = "Unable to get computers from ControlUp: $_" 
                 Write-CULog -Msg $errorMessage -ShowConsole -Type E
                 $errorCount++
                 break
             }
-        }else{
-            Write-Debug "Number of objects in DebugCUMachineEnvironment: $($DebugCUMachineEnvironment.count)"
-            if ($($DebugCUMachineEnvironment.count) -eq 2){
-                foreach ($envObjects in $DebugCUMachineEnvironment){
-                    if ($($envObjects  | Get-Member).TypeName[0] -eq "Create-CrazyCUEnvironment.CUComputerObject"){$CUComputers = $envObjects}
-                }
-            }else{$CUComputers = $DebugCUMachineEnvironment}
-        }
-        
+			
         Write-CULog -Msg  "CU Computers Count: $(if($CUComputers){ $CUComputers.count }else{ 0 })" -ShowConsole -Color Cyan
         #create a hashtable out of the CUMachines object as it's much faster to query. This is critical when looking up Machines when ControlUp contains ten's of thousands of machines.
         $CUComputersHashTable = @{}
-        foreach ($machine in $CUComputers){foreach ($obj in $machine){$CUComputersHashTable.Add($Obj.Name, $obj)}}
-
-        if (!($DebugCUFolderEnvironment)){
-            try {
-                $CUFolders   = Get-CUFolders # add a filter on path so only folders within the rootfolder are used
-            }catch{
-                $errorMessage = "Unable to get folders from ControlUp: $_"
-                Write-CULog -Msg $errorMessage  -ShowConsole -Type E
-                $errorCount++
-                break
-            }
-        }else{
-            Write-Debug "Number of folder objects in DebugCUMachineEnvironment: $($DebugCUMachineEnvironment.count)"
-            if ($($DebugCUMachineEnvironment.count) -eq 2){
-                foreach ($envObjects in $DebugCUMachineEnvironment){
-                    if ($($envObjects  | Get-Member).TypeName[0] -eq "Create-CrazyCUEnvironment.CUFolderObject"){$CUFolders = $envObjects}
-                }
-            }else{$CUFolders = Get-CUFolders}
-        }
-
+        foreach ($machine in $CUComputers){
+			foreach ($obj in $machine){
+					$CUComputersHashTable.Add($Obj.Name, $obj)
+				}
+		}
+		
+			try {$CUFolders = Get-CUFolders # add a filter on path so only folders within the rootfolder are used
+			}catch{
+				$errorMessage = "Unable to get folders from ControlUp: $_"
+				Write-CULog -Msg $errorMessage  -ShowConsole -Type E
+				$errorCount++
+				break
+			}
+			
         #endregion
         $OrganizationName = ($CUFolders)[0].path
         Write-CULog -Msg "Organization Name: $OrganizationName" -ShowConsole
@@ -662,16 +638,11 @@ function Build-CUTree {
         ## strip off leading \ as CU cmdlets don't like it
         [string[]]$CURootFolderElements = @(($CURootFolder.Trim('\').Split('\')))
         Write-Verbose -Message "Got $($CURootFolderElements.Count) elements in path `"$CURootFolder`""
-
+		
         ## see if first folder element is the organisation name and if not then we will prepend it as must have that
-        if($OrganizationName -ne $CURootFolderElements[0]){
-            #Write-CULog -Msg "Organization Name `"$OrganizationName`" not found in path `"$CURootFolder`" so adding" -Verbose
-            $CURootFolder = Join-Path -Path $OrganizationName -ChildPath $CURootFolder
-        }
+        if($OrganizationName -ne $CURootFolderElements[0]){$CURootFolder = Join-Path -Path $OrganizationName -ChildPath $CURootFolder}
 
         ## Code making folders checks if each element in folder exists and if not makes it so no pointmaking path here
-
-        #region Prepare items for synchronization
         #replace FolderPath in ExternalTree object with the local ControlUp Path:
         foreach ($obj in $externalTree){$obj.FolderPath = (Join-Path -Path $CURootFolder -ChildPath $obj.FolderPath).Trim('\')}
 
@@ -679,14 +650,11 @@ function Build-CUTree {
         $ExtTreeHashTable = @{}
         $ExtFolderPaths = New-Object -TypeName System.Collections.Generic.List[psobject]
         foreach ($ExtObj in $externalTree){foreach ($obj in $ExtObj){if($obj.Type -eq 'Computer'){$ExtTreeHashTable.Add($Obj.Name, $obj)}else{$ExtFolderPaths.Add($obj)}}}
-
-        Write-CULog -Msg "Target Folder Paths:" -ShowConsole
-        if ($ExtFolderPaths.count -ge 25){
-            Write-CULog "$($ExtFolderPaths.count) paths detected" -ShowConsole -SubMsg
-            foreach ($ExtFolderPath in $ExtFolderPaths){Write-CULog -Msg "$($ExtFolderPath.FolderPath)" -SubMsg}
-        }else{
-            foreach ($ExtFolderPath in $ExtFolderPaths){Write-CULog -Msg "$($ExtFolderPath.FolderPath)" -ShowConsole -SubMsg}
-        }
+        #foreach ($ExtObj in $externalTree){foreach ($obj in $ExtObj){if($obj.Type -eq 'Computer'){$ExtTreeHashTable.Add($Obj.Name, $obj)}else{if($obj.folderpath -notlike "*$OrganizationName*\$OrganizationName*"){$ExtFolderPaths.Add($obj)}}}}
+		#$ExtFolderPaths.folderpath|%{write-host $_};pause
+        Write-CULog -Msg "Target Folder Paths:"
+        Write-CULog "$($ExtFolderPaths.count) paths detected" -ShowConsole -SubMsg
+        foreach ($ExtFolderPath in $ExtFolderPaths){Write-CULog -Msg "$($ExtFolderPath.FolderPath)" -SubMsg}
 
         $FolderAddBatches   = New-Object System.Collections.Generic.List[PSObject]
         $FoldersToAddBatch  = New-CUBatchUpdate
@@ -694,10 +662,8 @@ function Build-CUTree {
 
         #we'll output the statistics at the end -- also helps with debugging
         $FoldersToAdd          = New-Object System.Collections.Generic.List[PSObject]
-        ## There can be problems when folders are added in large numbers so we will see how many new ones are being requested so we can control if necessary
-        $FoldersToAddBatchless = New-Object System.Collections.Generic.List[PSObject]
-        [hashtable]$newFoldersAdded = @{} ## keep track of what we've issued btch commands to create so we don't duplicate
-
+        [hashtable]$newFoldersAdded = @{} ## keep track of what we've issued batch commands to create so we don't duplicate
+		
         foreach ($ExtFolderPath in $ExtFolderPaths.FolderPath){
             if ($ExtFolderPath -notin $CUFolders.Path){ 
                 [string]$pathSoFar = $null
@@ -715,7 +681,7 @@ function Build-CUTree {
                                 $FoldersToAddBatch = New-CUBatchUpdate
                             }
                             Add-CUFolder -Name $pathElement -ParentPath $pathSoFar -Batch $FoldersToAddBatch
-                        }else{if(!$Preview){$FoldersToAddBatchless.Add([pscustomobject]@{ PathElement = $pathElement ; PathSoFar = $pathSoFar })}}
+                        }
 						
                         $FoldersToAdd.Add("Add-CUFolder -Name `"$pathElement`" -ParentPath `"$pathSoFar`"")
                         $FoldersToAddCount++
@@ -725,34 +691,6 @@ function Build-CUTree {
                 }
             }
         }
-
-        if($FoldersToAddBatchless -and $FoldersToAddBatchless.Count){
-            [int]$folderDelayMilliseconds = 0
-            if($FoldersToAddBatchless.Count -ge $batchCountWarning){
-                [string]$logText = "$($FoldersToAddBatchless.Count) folders to add which could cause performance issues"
-
-                if($force){
-                    Write-CULog -Msg $logText -ShowConsole -Type W
-                    $folderDelayMilliseconds = $folderCreateDelaySeconds * 500
-                }else{
-                    $errorMessage = "$logText, aborting - use -force to override" 
-                    Write-CULog -Msg $errorMessage -ShowConsole -Type E
-                    $errorCount++
-                    break
-                }
-            }
-            foreach($item in $FoldersToAddBatchless){
-                Write-Verbose -Message "Creating folder `"$($item.pathElement)`" in `"$($item.pathSoFar)`""
-                if(!($folderCreated = Add-CUFolder -Name $item.pathElement -ParentPath $item.pathSoFar) -or $folderCreated -notmatch "^Folder '$($item.pathElement)' was added successfully$"){
-                    Write-CULog -Msg "Failed to create folder `"$($item.pathElement)`" in `"$($item.pathSoFar)`" - $folderCreated" -ShowConsole -Type E
-                }
-                ## to help avoid central CU service becoming overwhelmed
-                if($folderDelayMilliseconds -gt 0){
-                    Start-Sleep -Milliseconds $folderDelayMilliseconds
-                }
-            }
-        }
-
         if ($FoldersToAddCount -le $maxFolderBatchSize -and $FoldersToAddCount -ne 0){$FolderAddBatches.Add($FoldersToAddBatch)}
 
         # Build computers batch
@@ -777,6 +715,7 @@ function Build-CUTree {
         Write-CULog "Determining Computer Objects to Add or Move" -ShowConsole
         foreach ($ExtComputer in $ExtComputers){
 	        if (($CUComputersHashTable.Contains("$($ExtComputer.Name)"))){
+			
     	        if ("$($ExtComputer.FolderPath)\" -notlike "$($CUComputersHashTable[$($ExtComputer.name)].Path)\"){
                     if ($ComputersMoveCount -ge $maxBatchSize){  ## we will execute computer batch operations $maxBatchSize at a time
                         Write-Verbose "Generating a new computer move batch"
@@ -796,20 +735,17 @@ function Build-CUTree {
                         $ComputersAddCount = 0
                         $ComputersAddBatch = New-CUBatchUpdate
                     }
-					
+                #write-host $($ExtComputer.FolderPath)
+				#write-host "$($extComputer.Name) - $($extComputer.Domain) - $($extComputer.Name) - $($extComputer.DNSName) - $($extComputer.Site)"
     	        try{Add-CUComputer -Domain $ExtComputer.Domain -Name $ExtComputer.Name -DNSName $ExtComputer.DNSName -FolderPath "$($ExtComputer.FolderPath)" -siteId $extComputer.Site -Batch $ComputersAddBatch}
-				catch{
-                    Write-CULog "Error while attempting to run Add-CUComputer" -ShowConsole -Type E
-                    Write-CULog "$($Error[0])"  -ShowConsole -Type E
-                }
-
+				catch{Write-CULog "Error while attempting to run Add-CUComputer" -ShowConsole -Type E; Write-CULog "$($Error[0])"  -ShowConsole -Type E}
+				
                 $MachinesToAdd.Add("Add-CUComputer -Domain $($ExtComputer.Domain) -Name $($ExtComputer.Name) -DNSName $($ExtComputer.DNSName) -FolderPath `"$($ExtComputer.FolderPath)`" -SiteId $SiteIdGUID")
-
                 $ComputersAddCount = $ComputersAddCount+1
 	        }
         }
-        if ($ComputersMoveCount -le $maxBatchSize -and $ComputersMoveCount -ne 0){ $ComputersMoveBatches.Add($ComputersMoveBatch) }
-        if ($ComputersAddCount -le $maxBatchSize -and $ComputersAddCount -ne 0)   { $ComputersAddBatches.Add($ComputersAddBatch)   }
+        if ($ComputersMoveCount -le $maxBatchSize -and $ComputersMoveCount -ne 0){$ComputersMoveBatches.Add($ComputersMoveBatch)}
+        if ($ComputersAddCount -le $maxBatchSize -and $ComputersAddCount -ne 0){$ComputersAddBatches.Add($ComputersAddBatch)}
 
         $FoldersToRemoveBatches = New-Object System.Collections.Generic.List[PSObject]
         $FoldersToRemoveBatch   = New-CUBatchUpdate
@@ -817,36 +753,36 @@ function Build-CUTree {
         #we'll output the statistics at the end -- also helps with debugging
         $FoldersToRemove = New-Object System.Collections.Generic.List[PSObject]
         
+		
         if ($Delete){
             Write-CULog "Determining Objects to be Removed" -ShowConsole
 	        # Build batch for folders which are in ControlUp but not in the external source
-
-            [string]$folderRegex = "^$([regex]::Escape($CURootFolder))\\.+"
+			$cuFolderSyncroot = "$CURootFolder$CUSyncFolder"
+            [string]$folderRegex = "^$([regex]::Escape($cuFolderSyncroot))\\.+"
             [array]$CUFolderSyncRoot = @($CUFolders.Where{ $_.Path -match $folderRegex })
-            if($CUFolderSyncRoot -and $CUFolderSyncRoot.Count){
-                Write-CULog "Root Target Path : $($CUFolderSyncRoot.Count) subfolders detected" -ShowConsole -Verbose
-            }else{
-                Write-CULog "Root Target Path : Only Target Folder Exists" -ShowConsole -Verbose
-            }
+			
+            if($CUFolderSyncRoot -and $CUFolderSyncRoot.Count){Write-CULog "Root Target Path : $($CUFolderSyncRoot.Count) subfolders detected" -ShowConsole -Verbose}
+			else{Write-CULog "Root Target Path : Only Target Folder Exists" -ShowConsole -Verbose}
             Write-CULog "Determining Folder Objects to be Removed" -ShowConsole
+
 	        foreach ($CUFolder in $($CUFolderSyncRoot.Path)){
                 $folderRegex = "$([regex]::Escape($CUFolder))"
                 ## need to test if the whole path matches or it's a sub folder (so "Folder 1" won't match "Folder 12")
                 if($ExtFolderPaths.Where({ $_.FolderPath -match "^$folderRegex$" -or $_.FolderPath -match "^$folderRegex\\" }).Count -eq 0 -and $CUFolder -ne $CURootFolder){
                 ## can't use a simple -notin as path may be missing but there may be child paths of it - GRL
-					$s = $CUFolder.split("\")
-					if("$($s[0])\$($s[1])\$($s[2])".toLower() -in $global:CCDisconnected){$skip = $true}else{$skip = $false}
-					write-host "$skip - " + "$($s[0])\$($s[1])\$($s[2])"
-					if ($Delete -and $CUFolder -and !$Skip){
-						if ($FoldersToRemoveCount -ge $maxFolderBatchSize){
-							Write-Verbose "Generating a new remove folder batch"
-							$FoldersToRemoveBatches.Add($FoldersToRemoveBatch)
-							$FoldersToRemoveCount = 0
-							$FoldersToRemoveBatch = New-CUBatchUpdate
-						}
-						Remove-CUFolder -FolderPath "$CUFolder" -Force -Batch $FoldersToRemoveBatch
-						$FoldersToRemove.Add("Remove-CUFolder -FolderPath `"$CUFolder`" -Force")
-						$FoldersToRemoveCount = $FoldersToRemoveCount+1
+    	        ##if (($CUFolder -notin $ExtFolderPaths.FolderPath) -and ($CUFolder -ne $("$CURootFolder"))){ #prevents excluding the root folder
+						$skip = $false
+						foreach ($path in $global:eucDisconnectedMsg){if ($CUFolder -like "$path*"){$skip = $true;break}}
+						if ($Delete -and $CUFolder -and !$Skip){
+							if ($FoldersToRemoveCount -ge $maxFolderBatchSize){  ## we will execute computer batch operations $maxBatchSize at a time
+								Write-Verbose "Generating a new remove folder batch"
+								$FoldersToRemoveBatches.Add($FoldersToRemoveBatch)
+								$FoldersToRemoveCount = 0
+								$FoldersToRemoveBatch = New-CUBatchUpdate
+							}
+							Remove-CUFolder -FolderPath "$CUFolder" -Force -Batch $FoldersToRemoveBatch
+							$FoldersToRemove.Add("Remove-CUFolder -FolderPath `"$CUFolder`" -Force")
+							$FoldersToRemoveCount = $FoldersToRemoveCount+1
 						
 					}
     	        }
@@ -855,12 +791,18 @@ function Build-CUTree {
             Write-CULog "Determining Computer Objects to be Removed" -ShowConsole
 	        # Build batch for computers which are in ControlUp but not in the external source
             [string]$curootFolderAllLower = $CURootFolder.ToLower()
-
-	        foreach ($CUComputer in $CUComputers.Where{$_.path -like "$CURootFolder*"}){
+			
+	        foreach ($CUComputer in $CUComputers.Where{$_.path.toLower() -like "$CURootFolder$CUSyncFolder*".toLower()}){
+				
     	            if (!($ExtTreeHashTable[$CUComputer.name].name)){
-						$s = $cucomputer.path.split("\")
-						if("$($s[0])\$($s[1])\$($s[2])" -in $global:CCDisconnected){$skip = $true}else{$skip = $false}
-                        if ($Delete -and !$skip){
+						$CUComputerPath = $cucomputer.path
+						$skip = $false
+						foreach ($path in $global:eucDisconnectedMsg){
+							if ($CUComputerPath -like "$path*"){$skip = $true;break}
+						}
+						if (($ExtComputers.Contains("$($CUComputer.name)"))){$skip = $true}
+
+                        if ($Delete -and !$skip){							
                             if ($FoldersToRemoveCount -ge $maxFolderBatchSize){
                                 Write-Verbose "Generating a new remove computer batch"
                                 $ComputersRemoveBatches.Add($ComputersRemoveBatch)
@@ -872,26 +814,47 @@ function Build-CUTree {
                             $ComputersRemoveCount = $ComputersRemoveCount+1
                         }
                     }
+    	        ##}
 	        }
         }
+		
+		
         if ($FoldersToRemoveCount -le $maxFolderBatchSize -and $FoldersToRemoveCount -ne 0){ $FoldersToRemoveBatches.Add($FoldersToRemoveBatch)   }
         if ($ComputersRemoveCount -le $maxBatchSize -and $ComputersRemoveCount -ne 0)       { $ComputersRemoveBatches.Add($ComputersRemoveBatch)   }
 
+        #endregion
+
         Write-CULog -Msg "Folders to Add     : $($FoldersToAdd.Count)" -ShowConsole -Color White 
         Write-CULog -Msg "Folders to Add Batches     : $($FolderAddBatches.Count)" -ShowConsole -Color Gray -SubMsg
-        if ($($FoldersToAdd.Count) -ge 25){foreach ($obj in $FoldersToAdd){Write-CULog -Msg "$obj" -SubMsg}}else{foreach ($obj in $FoldersToAdd){Write-CULog -Msg "$obj"}}
+        if ($($FoldersToAdd.Count) -ge 25){
+            foreach ($obj in $FoldersToAdd){Write-CULog -Msg "$obj" -SubMsg}
+        }else{
+            foreach ($obj in $FoldersToAdd){Write-CULog -Msg "$obj"} #-ShowConsole -Color Green -SubMsg}
+        }
 
         Write-CULog -Msg "Folders to Remove  : $($FoldersToRemove.Count)" -ShowConsole -Color White
         Write-CULog -Msg "Folders to Remove Batches  : $($FoldersToRemoveBatches.Count)" -ShowConsole -Color Gray -SubMsg
-        if ($($FoldersToRemove.Count) -ge 25){foreach ($obj in $FoldersToRemove){Write-CULog -Msg "$obj" -SubMsg}}else{foreach ($obj in $FoldersToRemove){Write-CULog -Msg "$obj"}}
+        if ($($FoldersToRemove.Count) -ge 25){
+            foreach ($obj in $FoldersToRemove){Write-CULog -Msg "$obj" -SubMsg}
+        }else{
+            foreach ($obj in $FoldersToRemove){Write-CULog -Msg "$obj"} #-ShowConsole -Color DarkYellow -SubMsg}
+        }
 
         Write-CULog -Msg "Computers to Add   : $($MachinesToAdd.Count)" -ShowConsole -Color White
         Write-CULog -Msg "Computers to Add Batches   : $($ComputersAddBatches.Count)" -ShowConsole -Color Gray -SubMsg
-        if ($($MachinesToAdd.Count) -ge 25){foreach ($obj in $MachinesToAdd){Write-CULog -Msg "$obj" -SubMsg}}else{foreach ($obj in $MachinesToAdd){Write-CULog -Msg "$obj"}}
+        if ($($MachinesToAdd.Count) -ge 25){
+            foreach ($obj in $MachinesToAdd){Write-CULog -Msg "$obj" -SubMsg} 
+        }else{
+            foreach ($obj in $MachinesToAdd){Write-CULog -Msg "$obj"} #-ShowConsole -Color Green -SubMsg}
+        }
 
         Write-CULog -Msg "Computers to Move  : $($MachinesToMove.Count)" -ShowConsole -Color White
         Write-CULog -Msg "Computers to Move Batches  : $($ComputersMoveBatches.Count)" -ShowConsole -Color Gray -SubMsg
-        if ($($MachinesToMove.Count) -ge 25){foreach ($obj in $MachinesToMove){Write-CULog -Msg "$obj" -SubMsg}}else{foreach ($obj in $MachinesToMove){Write-CULog -Msg "$obj"}}
+        if ($($MachinesToMove.Count) -ge 25){
+            foreach ($obj in $MachinesToMove){Write-CULog -Msg "$obj" -SubMsg}
+        }else{
+            foreach ($obj in $MachinesToMove){Write-CULog -Msg "$obj"} #-ShowConsole -Color DarkYellow -SubMsg}
+        }
 
         Write-CULog -Msg "Computers to Remove: $($MachinesToRemove.Count)" -ShowConsole -Color White
         Write-CULog -Msg "Computers to Remove Batches: $($ComputersRemoveBatches.Count)" -ShowConsole -Color Gray -SubMsg
@@ -901,11 +864,11 @@ function Build-CUTree {
 		$bcutStart = get-date
         Write-CULog -Msg "Build-CUTree took: $($(New-TimeSpan -Start $startTime -End $endTime).Seconds) Seconds." -ShowConsole -Color White
         Write-CULog -Msg "Committing Changes:" -ShowConsole -Color DarkYellow
-        if ($ComputersRemoveBatches.Count -gt 0){ $errorCount += Execute-PublishCUUpdates -BatchObject $ComputersRemoveBatches -Message "Executing Computer Object Removal" }
-        if ($FoldersToRemoveBatches.Count -gt 0){ $errorCount += Execute-PublishCUUpdates -BatchObject $FoldersToRemoveBatches -Message "Executing Folder Object Removal"   }
-        if ($FolderAddBatches.Count -gt 0 -and $batchCreateFolders){ $errorCount += Execute-PublishCUUpdates -BatchObject $FolderAddBatches -Message "Executing Folder Object Adds"            }
-        if ($ComputersAddBatches.Count -gt 0){ $errorCount += Execute-PublishCUUpdates -BatchObject $ComputersAddBatches -Message "Executing Computer Object Adds"       }
-        if ($ComputersMoveBatches.Count -gt 0){ $errorCount += Execute-PublishCUUpdates -BatchObject $ComputersMoveBatches -Message "Executing Computer Object Moves"     }
+		if ($FolderAddBatches.Count -gt 0 -and $batchCreateFolders){ $errorCount += Execute-PublishCUUpdates -BatchObject $FolderAddBatches -Message "Executing Folder Object Adds"}
+		if ($ComputersAddBatches.Count -gt 0){ $errorCount += Execute-PublishCUUpdates -BatchObject $ComputersAddBatches -Message "Executing Computer Object Adds"}
+		if ($ComputersMoveBatches.Count -gt 0){$errorCount += Execute-PublishCUUpdates -BatchObject $ComputersMoveBatches -Message "Executing Computer Object Moves"}
+        if ($ComputersRemoveBatches.Count -gt 0){ $errorCount += Execute-PublishCUUpdates -BatchObject $ComputersRemoveBatches -Message "Executing Computer Object Removal"}
+		if ($FoldersToRemoveBatches.Count -gt 0){ $errorCount += Execute-PublishCUUpdates -BatchObject $FoldersToRemoveBatches -Message "Executing Folder Object Removal"}
         Write-CULog -Msg "Returning $errorCount to caller"
 		$bcutEnd = get-date
 		Write-CULog -Msg "Committing Changes took: $($(New-TimeSpan -start $bcutStart -end $bcutEnd).Seconds) Seconds."
@@ -918,15 +881,15 @@ function Build-CUTree {
 ############################
 
 #delete Logs Older Than 30 days
-Delete-Files -Path "$exportPath\Logs" -OlderThanDays 30 -extension "log"
+Delete-Files -Path "$LogPath" -OlderThanDays $LogDuration -extension "log"
 
 
 #Kicking off Build CUTree 
 if($debug){Write-CULog -Msg "Starting BuildCUTree, this could also take some time" -ShowConsole}
 else{Write-CULog -Msg "Starting BuildCUTree, this could also take some time"}
 
-$BuildCUTreeParams = @{CURootFolder = $syncFolder}
-$BuildCUTreeParams.Add("Force",$true)
+$BuildCUTreeParams = @{CURootFolder = ""}
+$BuildCUTreeParams = @{CUSyncFolder = "$syncFolder"}
 if ($Preview){$BuildCUTreeParams.Add("Preview",$true)}
 if ($Delete){$BuildCUTreeParams.Add("Delete",$true)}
 if ($LogFile){$BuildCUTreeParams.Add("LogFile",$LogFile)}
