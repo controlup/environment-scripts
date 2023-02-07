@@ -184,7 +184,7 @@ if(!$global:isAdmin){Write-CULog -Msg "User is not Local Admin, this may cause s
 [Int32]$LogDuration = $LogDuration
 [bool]$Preview = if($Preview.ToLower()[0] -eq "y"){$false}else{$true}
 [bool]$VerbosDebug = if($VerbosDebug.ToLower()[0] -eq "y"){$true}else{$false}
-[bool]$save = if($saveConfig.ToLower()[0] -eq "y"){$true}else{$false}
+[bool]$save = if($saveConfig.ToLower()[0] -eq "y" -or $saveConfig.ToLower()[0] -eq "s"){$true}else{$false}
 
 $exportPath = "$($env:programdata)\ControlUp\SyncScripts"
 
@@ -344,7 +344,7 @@ if($VerbosDebug){Write-CULog -Msg "Determine if an EUC connection exists but is 
 else{Write-CULog -Msg "Determine if an EUC connection exists but is disconnected"}
 
 
-(Invoke-CUQuery -Scheme "Cluster" -table "PartitionToRecord" -Fields "Name","ItemType" -where "ItemType=6" -take $MaxValue).data.Name|%{$eucNames.add($_)|out-null}
+(Invoke-CUQuery -Scheme "Coordinator" -table "PartitionToRecord" -Fields "Name","ItemType" -where "ItemType=6" -take $MaxValue).data.Name|%{$eucNames.add($_)|out-null}
 (Invoke-CUQuery -Fields "Name","Path" -Scheme "Main" -Table "Folders" -Focus "$root\EUC Environments").data|%{$global:eucFList.add($_)|out-null}
 
 foreach ($eucf in $global:eucFList){
