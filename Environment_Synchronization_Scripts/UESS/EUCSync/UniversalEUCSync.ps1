@@ -301,7 +301,7 @@ $uniqueFolders = [System.Collections.ArrayList]@()
 
 $maxValue = [int32]::MaxValue
 
-(Invoke-CUQuery -Fields "Name" -Scheme "Main" -Table "Folders" -Focus "$root\EUC Environments").data.name|%{$global:FolderNameCase.add($_)|out-null}
+(Invoke-CUQuery -Fields "Name" -Scheme "Main" -Table "Folders" -Take $maxValue -Focus "$root\EUC Environments").data.name|%{$global:FolderNameCase.add($_)|out-null}
 
 if($addBrokers){
 	#Adding cloud connectorss, connection servers, delivery controllers
@@ -345,7 +345,7 @@ else{Write-CULog -Msg "Determine if an EUC connection exists but is disconnected
 
 
 (Invoke-CUQuery -Scheme "Coordinator" -table "PartitionToRecord" -Fields "Name","ItemType" -where "ItemType=6" -take $MaxValue).data.Name|%{$eucNames.add($_)|out-null}
-(Invoke-CUQuery -Fields "Name","Path" -Scheme "Main" -Table "Folders" -Focus "$root\EUC Environments").data|%{$global:eucFList.add($_)|out-null}
+(Invoke-CUQuery -Fields "Name","Path" -Take $maxValue -Scheme "Main" -Table "Folders" -Focus "$root\EUC Environments").data|%{$global:eucFList.add($_)|out-null}
 
 foreach ($eucf in $global:eucFList){
 	foreach ($eucName in $eucNames){
@@ -355,7 +355,7 @@ foreach ($eucf in $global:eucFList){
 	}
 }
 
-$eucConCheck = $eucFolder
+$eucConCheck = $eucFolder.psobject.copy()
 
 $eucConnectedMachines = (Invoke-CUQuery -Fields "ParentFolderPath", "sName", "GuestHostName" -Take $maxValue -Scheme "Main" -Table "XD_VDA" -Focus "$root\EUC Environments").data
 $eucCPF = $eucConnectedMachines.parentfolderpath|sort -unique
