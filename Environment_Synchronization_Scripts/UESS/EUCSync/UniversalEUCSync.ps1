@@ -11,7 +11,7 @@ Param(
 	[Parameter(Mandatory=$false)][string]$GetHelp,
 	[Parameter(Mandatory=$false)][string]$SaveConfig
 )
-$global:isAdmin = (New-Object Security.Principal.WindowsPrincipal ([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
+$global:isAdmin = $true
 if($PSVersionTable.psversion.major -lt 5){throw "This script Requires Powershell 5 or higher."}
 #########################################
 ########### Support Functions ###########
@@ -271,14 +271,12 @@ if(!$syncFolder){throw "No sync folder found. `n`nPlease use arguments or the co
 ### Build Variables and Create Object ###
 #########################################
 ##Globals
-$global:sf = $syncFolder
 $global:defaultDomain = [DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain().name
 $global:FolderNameCase = [System.Collections.ArrayList]@()
 $global:OriginalPaths = @{}
 $global:BadDomains = [System.Collections.ArrayList]@()
 $global:GoodDomains = [System.Collections.ArrayList]@()
 $global:eucDisconnected = [System.Collections.ArrayList]@()
-$global:eucDisconnectedMsg = [System.Collections.ArrayList]@()
 $global:eucConnected = [System.Collections.ArrayList]@()
 $global:eucFList = [System.Collections.ArrayList]@()
 
@@ -287,7 +285,7 @@ $root = $orgName
 $rootPath = if(($syncFolder.toLower()) -like "$($root.toLower())*"){$syncFolder}else{"$root\$syncFolder"}
 
 ##array List
-$iq = [System.Collections.ArrayList]@()
+$qo = [System.Collections.ArrayList]@()
 $names = [System.Collections.ArrayList]@()
 $noDNS = [System.Collections.ArrayList]@()
 $folderList = [System.Collections.ArrayList]@()
@@ -299,6 +297,23 @@ $eucNames = [System.Collections.ArrayList]@()
 $EUCCon = [System.Collections.ArrayList]@()
 $uniqueFolders = [System.Collections.ArrayList]@()
 
+$iq = New-Object -TypeName System.Collections.Generic.List[PSObject]
+class allMachines{
+    [string]$ParentFolderPath
+    [string]$sName
+    [string]$GuestHostName
+    [string]$XDeskCatalogName
+    [string]$XDeskGroup
+        allMachines ([String]$ParentFolderPath,[string]$sName,[string]$GuestHostName,[string]$XDeskCatalogName,[string]$XDeskGroup) {
+        $this.ParentFolderPath = $ParentFolderPath
+        $this.sName = $sName
+        $this.GuestHostName = $GuestHostName
+        $this.XDeskCatalogName = $XDeskCatalogName
+        $this.XDeskGroup = $XDeskGroup
+    }
+}
+
+
 $maxValue = [int32]::MaxValue
 
 (Invoke-CUQuery -Fields "Name" -Scheme "Main" -Table "Folders" -Take $maxValue -Focus "$root\EUC Environments").data.name|%{$global:FolderNameCase.add($_)|out-null}
@@ -307,8 +322,8 @@ if($addBrokers){
 	#Adding cloud connectorss, connection servers, delivery controllers
 	if($VerbosDebug){Write-CULog -Msg "Adding cloud connectors, connection servers, delivery controllers to array" -ShowConsole -color Green}
 	else{Write-CULog -Msg "Adding cloud connectors, connection servers, delivery controllers to array"}
-	$iq.Add((Invoke-CUQuery -Fields "ParentFolderPath", "sName", "GuestHostName" -Take $maxValue -Scheme "Main" -Table "XD_Brokers" -Focus "$root\EUC Environments").data)|out-null
-	$iq.Add((Invoke-CUQuery -Fields "xdBrokerFolderPath", "sName", "GuestHostName" -Take $maxValue -Scheme "Main" -Table "CloudConnector" -Focus "$root\EUC Environments").data)|out-null
+	$qo.Add((Invoke-CUQuery -Fields "ParentFolderPath", "sName", "GuestHostName" -Take $maxValue -Scheme "Main" -Table "XD_Brokers" -Focus "$root\EUC Environments").data)|out-null
+	$qo.Add((Invoke-CUQuery -Fields "xdBrokerFolderPath", "sName", "GuestHostName" -Take $maxValue -Scheme "Main" -Table "CloudConnector" -Focus "$root\EUC Environments").data)|out-null
 }else{
 	#write-host "Skipping Brokers"
 }
@@ -316,7 +331,21 @@ if($addBrokers){
 #Pull All EUC Machines from delivery groups and desktop pools
 if($VerbosDebug){Write-CULog -Msg "Pull All EUC Machines from delivery groups and desktop pools to array" -ShowConsole -color Green}
 else{Write-CULog -Msg "Pull All EUC Machines from delivery groups and desktop pools to array"}
-$iq.Add((Invoke-CUQuery -Fields "ParentFolderPath", "sName", "GuestHostName" -Take $maxValue -Scheme "Main" -Table "XD_VDA" -Focus "$root\EUC Environments").data)|out-null
+$qo.Add((Invoke-CUQuery -Fields "ParentFolderPath", "sName", "GuestHostName", "XDeskCatalogName", "XDeskGroup" -Take $maxValue -Scheme "Main" -Table "XD_VDA" -Focus "$root\EUC Environments").data)|out-null
+
+
+$qo|%{
+	$_|%{
+		$machineTable = @{
+			"ParentFolderPath" = if($_.ParentFolderPath){$_.ParentFolderPath}else{$_.xdBrokerFolderPath}
+			"sName"= $_.sName
+			"GuestHostName"= $_.GuestHostName
+			"XDeskCatalogName"= if($_.XDeskCatalogName){$_.XDeskCatalogName}else{$null}
+			"XDeskGroup"= if($_.XDeskGroup){$_.XDeskGroup}else{$null}
+		}
+		$iq.Add([allMAchines]::new($machineTable.ParentFolderPath,$machineTable.sname,$machineTable.GuestHostName,$machineTable.XDeskCatalogName,$machineTable.XDeskGroup))|out-null
+	}
+}
 
 #Put all query machines into an object for easy processing
 if($VerbosDebug){Write-CULog -Msg "Put all query machines into an object for easy processing" -ShowConsole -color Green}
@@ -324,78 +353,73 @@ else{Write-CULog -Msg "Put all query machines into an object for easy processing
 foreach ($q in $iq){
 	foreach ($item in $q){
 		if($item.ParentFolderPath){
-			$path = folderRemap $item.ParentFolderPath $item.sname
 			$global:OriginalPaths.add($item.sname ,$item.ParentFolderPath)
+			if ($item.XDeskCatalogName){
+				if (!$item.XDeskGroup){
+					$path = folderRemap ($($item.ParentFolderPath) + "\_Unassigned\MC-" + $($item.XDeskCatalogName)) $item.sname
+				}else{
+					$path = folderRemap $item.ParentFolderPath $item.sname
+				}
+
+			}else{
+				$path = folderRemap $item.ParentFolderPath $item.sname
+			}
 		}
-		if($item.xdBrokerFolderPath){
-			$path = folderRemap $item.xdBrokerFolderPath $item.sname
-			$global:OriginalPaths.add($item.sname ,$item.xdBrokerFolderPath)
+		if(!$item.XDeskCatalogName -and $item.ParentFolderPath){
+			$path = folderRemap $item.ParentFolderPath $item.sname
 		}
 
 		$query.Add([machines]::new($path,$item.sname,$item.GuestHostName))|out-null
 	}
 }
+
+
 #####################################################
-#############connected/disconnected down############
+#############connected/disconnected down ############
 #####################################################
+$connectionStatus = New-Object -TypeName System.Collections.Generic.List[PSObject]
+class Connections{
+    [string]$Extension
+    [string]$Machines
+    [string]$Connected
+    [string]$FolderPath
+    [string]$RemapFolderPath
+        Connections ([String]$Extension,[string]$Machines,[string]$Connected,[string]$FolderPath,[string]$RemapFolderPath) {
+        $this.Extension = $Extension
+        $this.Machines = $Machines
+        $this.Connected = $Connected
+		$this.FolderPath = $FolderPath
+		$this.RemapFolderPath = $RemapFolderPath
+    }
+}
 
 #Determine if an EUC connection exists but is disconnected
 if($VerbosDebug){Write-CULog -Msg "Determine if an EUC connection exists but is disconnected" -ShowConsole -color Green}
 else{Write-CULog -Msg "Determine if an EUC connection exists but is disconnected"}
 
-
 (Invoke-CUQuery -Scheme "Coordinator" -table "PartitionToRecord" -Fields "Name","ItemType" -where "ItemType=6" -take $MaxValue).data.Name|%{$eucNames.add($_)|out-null}
 (Invoke-CUQuery -Fields "Name","Path" -Take $maxValue -Scheme "Main" -Table "Folders" -Focus "$root\EUC Environments").data|%{$global:eucFList.add($_)|out-null}
 
-foreach ($eucf in $global:eucFList){
-	foreach ($eucName in $eucNames){
-		if ($eucf.name -eq $eucName){
-			$eucFolder.add($eucf.path)|out-null
-		}
+foreach ($e in $eucNames){
+	$machineCount = ($iq.ParentFolderPath|?{$_ -like "*$e*"}).count
+	$connected = if($machineCount){$true}else{$false}
+	$path = $global:eucFList.Path|?{$_ -like "*$e"}
+	$remapPath = icReplace -string (folderRemap $path) -this "euc environments" -that $syncFolder
+	$connectionStatus.Add([Connections]::new($e,$machineCount,$connected,$path,$remapPath))|out-null
+}
+
+foreach ($c in $connectionstatus){
+	if ($c.connected -eq $true){$global:eucConnected.Add($c.RemapFolderPath)|out-null}else{$global:eucDisconnected.Add($c.RemapFolderPath)|out-null}
+}
+
+if($connectionstatus.connected -eq $false){
+	if($VerbosDebug){Write-CULog -Msg "Disconnected:" -ShowConsole -Type W}
+	else{Write-CULog -Msg "Disconnected:" -Type W}
+	$global:eucDisconnected|%{
+		if($VerbosDebug){Write-CULog -Msg "$_" -ShowConsole -SubMsg -Type W}
+		else{Write-CULog -Msg "$_" -SubMsg -Type W}
 	}
 }
-
-$eucConCheck = $eucFolder.psobject.copy()
-
-$eucConnectedMachines = (Invoke-CUQuery -Fields "ParentFolderPath", "sName", "GuestHostName" -Take $maxValue -Scheme "Main" -Table "XD_VDA" -Focus "$root\EUC Environments").data
-$eucCPF = $eucConnectedMachines.parentfolderpath|sort -unique
-
-#if EUC folder is disconnected, do not remove machines
-if($VerbosDebug){Write-CULog -Msg "if EUC folder is disconnected, do not remove machines" -ShowConsole -color Green}
-else{Write-CULog -Msg "if EUC folder is disconnected, do not remove machines"}
-
-foreach ($folder in $eucConnectedMachines){
-	$eucFolder.remove($folder.parentfolderpath)
-	$EUCCon.add($folder.parentfolderpath)|out-null
-}
-$EC = $EUCCon|sort -unique|out-string
-
-foreach ($f in $eucConCheck){
-	if (($EC|?{$_.toLower() -like "*$($f.toLower())*"})){$global:eucConnected.Add($f)|out-null}else{$global:eucDisconnectedMsg.Add($f)|out-null}
-}
-
-#Remaps every folder to where they will belong, this is from the Map.cfg
-if($VerbosDebug){Write-CULog -Msg "Remaps every folder to where they will belong, this is from the Map.cfg" -ShowConsole -color Green}
-else{Write-CULog -Msg "Remaps every folder to where they will belong, this is from the Map.cfg"}
-$eucFolder|%{
-	$ex = $_.split("\")
-	$map = if($global:folderMaps){folderRemap "$rootPath\$($ex[2])".toLower()}else{"$rootPath\$($ex[2])".toLower()}
-	$global:eucDisconnected.Add($map)|out-null
-}
-##Display Connected and Disconnected machines in console/logs
-if($VerbosDebug){Write-CULog -Msg "Connected:" -ShowConsole -Color Cyan}
-else{Write-CULog -Msg "Connected:"}
-$global:eucConnected|%{
-	if($VerbosDebug){Write-CULog -Msg "$_" -ShowConsole -SubMsg -Color Cyan}
-	else{Write-CULog -Msg "$_" -SubMsg}
-}
-if($VerbosDebug){Write-CULog -Msg "Disconnected:" -ShowConsole -Type W}
-else{Write-CULog -Msg "Disconnected:" -Type W}
-$global:eucDisconnectedMsg|%{
-	if($VerbosDebug){Write-CULog -Msg "$_" -ShowConsole -SubMsg -Type W}
-	else{Write-CULog -Msg "$_" -SubMsg -Type W}
-}
-
 #####################################################
 #############connected/disconnected above############
 #####################################################
@@ -770,7 +794,7 @@ function Build-CUTree {
                 ## can't use a simple -notin as path may be missing but there may be child paths of it - GRL
     	        ##if (($CUFolder -notin $ExtFolderPaths.FolderPath) -and ($CUFolder -ne $("$CURootFolder"))){ #prevents excluding the root folder
 						$skip = $false
-						foreach ($path in $global:eucDisconnectedMsg){if ($CUFolder -like "$path*"){$skip = $true;break}}
+						foreach ($path in $global:eucDisconnected){if ($CUFolder -like "$path*"){$skip = $true;break}}
 						if ($Delete -and $CUFolder -and !$Skip){
 							if ($FoldersToRemoveCount -ge $maxFolderBatchSize){  ## we will execute computer batch operations $maxBatchSize at a time
 								Write-Verbose "Generating a new remove folder batch"
@@ -795,7 +819,7 @@ function Build-CUTree {
     	            if (!($ExtTreeHashTable[$CUComputer.name].name)){
 						$CUComputerPath = $cucomputer.path
 						$skip = $false
-						foreach ($path in $global:eucDisconnectedMsg){
+						foreach ($path in $global:eucDisconnected){
 							if ($CUComputerPath -like "$path*"){$skip = $true;break}
 						}
 						if (($ExtComputers.Contains("$($CUComputer.name)"))){$skip = $true}
