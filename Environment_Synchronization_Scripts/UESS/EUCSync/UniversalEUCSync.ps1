@@ -11,7 +11,7 @@ Param(
 	[Parameter(Mandatory=$false)][string]$GetHelp,
 	[Parameter(Mandatory=$false)][string]$SaveConfig
 )
-$global:isAdmin = $true
+#$global:isAdmin = $true
 if($PSVersionTable.psversion.major -lt 5){throw "This script Requires Powershell 5 or higher."}
 #########################################
 ########### Support Functions ###########
@@ -32,10 +32,10 @@ Param(
     if (!($SubMsg)){$PreMsg = "+"}else{$PreMsg = "`t>"}
     $date = Get-Date -Format G
     if ($Global:LogFile){Write-Output "$date | $LogType | $Msg"  | Out-file $($Global:LogFile) -Append}
-	if($global:isAdmin){
+	<#if($global:isAdmin){
 		if ($Type -eq "E"){Write-CUEventLog -EventID 9500 -Message $Msg -EntryType "Error"}    
 		if ($Type -eq "W"){Write-CUEventLog -EventID 9300 -Message $Msg -EntryType "Warning"}   
-	}
+	}#>
     if (!($ShowConsole)){
 	    if (($Type -eq "W") -or ($Type -eq "E")){Write-Host "$PreMsg $Msg" -ForegroundColor $Color;$Color = $null}else{Write-Verbose -Message "$PreMsg $Msg";$Color = $null}
     }else{
@@ -503,13 +503,15 @@ foreach ($item in $data){
 					$global:BadDomains.add($domain)|out-null
 				}
 			}
-			if($domain -in $global:BadDomains){$domain = $global:defaultDomain}
+			#if($domain -in $global:BadDomains){$domain = $global:defaultDomain}
+			if($domain -in $global:BadDomains){$domain = $null}
 			
 		}else{
-			$Domain = $global:defaultDomain
+			#$Domain = $global:defaultDomain
+			$Domain = $null
 		}
 		
-	if($dnsName){
+	if($dnsName -and $Domain){
 		$Environment.Add(([ControlUpObject]::new($name, $folder ,"Computer", $Domain ,"Added by Sync Script",$dnsName,$site)))
 	}
 }
@@ -794,14 +796,24 @@ function Build-CUTree {
                 ## can't use a simple -notin as path may be missing but there may be child paths of it - GRL
     	        ##if (($CUFolder -notin $ExtFolderPaths.FolderPath) -and ($CUFolder -ne $("$CURootFolder"))){ #prevents excluding the root folder
 						$skip = $false
-						foreach ($path in $global:eucDisconnected){if ($CUFolder -like "$path*"){$skip = $true;break}}
+						
+						foreach ($path in $global:eucDisconnected){
+							write-host $CUFolder.toLower()
+							#write-host "$Path`n================="
+							if ($CUFolder -like "$path*" -or $path -like "$CUFolder*"){
+								Write-Host "SKIPPING: [Disconnected]"
+								$skip = $true
+								break
+							}
+						}
+						#write-host "$skip, $cuFolder"
 						if ($Delete -and $CUFolder -and !$Skip){
 							if ($FoldersToRemoveCount -ge $maxFolderBatchSize){  ## we will execute computer batch operations $maxBatchSize at a time
 								Write-Verbose "Generating a new remove folder batch"
 								$FoldersToRemoveBatches.Add($FoldersToRemoveBatch)
 								$FoldersToRemoveCount = 0
 								$FoldersToRemoveBatch = New-CUBatchUpdate
-							}
+							}#else{write-host "$cuFolder $skip $delete";pause}
 							Remove-CUFolder -FolderPath "$CUFolder" -Force -Batch $FoldersToRemoveBatch
 							$FoldersToRemove.Add("Remove-CUFolder -FolderPath `"$CUFolder`" -Force")
 							$FoldersToRemoveCount = $FoldersToRemoveCount+1
@@ -809,7 +821,7 @@ function Build-CUTree {
 					}
     	        }
 	        }
-
+			#pause
             Write-CULog "Determining Computer Objects to be Removed" -ShowConsole
 	        # Build batch for computers which are in ControlUp but not in the external source
             [string]$curootFolderAllLower = $CURootFolder.ToLower()
@@ -819,13 +831,13 @@ function Build-CUTree {
     	            if (!($ExtTreeHashTable[$CUComputer.name].name)){
 						$CUComputerPath = $cucomputer.path
 						$skip = $false
-						foreach ($path in $global:eucDisconnected){
-							if ($CUComputerPath -like "$path*"){$skip = $true;break}
-						}
+						foreach ($path in $global:eucDisconnected){if ($CUComputerPath -like "$path*" -or $path -like "$CUComputerPath*"){$skip = $true;break}}
+						#write-host "Skip: $skip - Folder: $CUComputerPath"
+						#pause
 						if (($ExtComputers.Contains("$($CUComputer.name)"))){$skip = $true}
 
-                        if ($Delete -and !$skip){							
-                            if ($FoldersToRemoveCount -ge $maxFolderBatchSize){
+                        if ($Delete -and !$skip){						
+                            if ($ComputersRemoveCount -ge $maxBatchSize){
                                 Write-Verbose "Generating a new remove computer batch"
                                 $ComputersRemoveBatches.Add($ComputersRemoveBatch)
                                 $ComputersRemoveCount = 0
@@ -834,7 +846,7 @@ function Build-CUTree {
         	                Remove-CUComputer -Name $($CUComputer.Name) -Force -Batch $ComputersRemoveBatch
                             $MachinesToRemove.Add("Remove-CUComputer -Name $($CUComputer.Name) -Force")
                             $ComputersRemoveCount = $ComputersRemoveCount+1
-                        }
+                        }#else{write-host $cuFolder;pause}
                     }
     	        ##}
 	        }
