@@ -503,9 +503,7 @@ foreach ($item in $data){
 					$global:BadDomains.add($domain)|out-null
 				}
 			}
-			#if($domain -in $global:BadDomains){$domain = $global:defaultDomain}
-			if($domain -in $global:BadDomains){$domain = $null}
-			
+			if($domain -in $global:BadDomains -and $dnsName -like "*"){$domain = $global:defaultDomain}	
 		}else{
 			#$Domain = $global:defaultDomain
 			$Domain = $null
